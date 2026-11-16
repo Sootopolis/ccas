@@ -40,15 +40,19 @@ object TestRecruitConfirm extends ZIOSpecDefault {
     }
 
   /** Runs the confirmation with a submit that records the club and criteria it was asked to run, and answers 7. */
-  private def confirm(resolution: ClubResolution): Task[(Int, List[(ClubTarget, Option[Long])])] =
+  private def confirm(
+    resolution: ClubResolution,
+    nonDefaultServerOption: Option[String]
+  ): Task[(Int, List[(ClubTarget, Option[Long])])] =
     for {
       asked     <- Ref.make(0)
       submitted <- Ref.make(List.empty[(ClubTarget, Option[Long])])
       routes = Routes(criteriaRoute(resolution, asked))
       wiring <- TempWiring(routes)
       api    <- FakeCcasServer.api(routes)
-      code <- Dispatcher.confirmCriteria(wiring, api, None, named, "default") { (target, criteriaId) =>
-        submitted.update(_ :+ (target -> criteriaId)).as(7)
+      code <- Dispatcher.confirmCriteria(wiring, api, None, nonDefaultServerOption, named, "default") {
+        (target, criteriaId) =>
+          submitted.update(_ :+ (target -> criteriaId)).as(7)
       }
       targets <- submitted.get
     } yield (code, targets)
@@ -87,7 +91,7 @@ object TestRecruitConfirm extends ZIOSpecDefault {
     test("a declined confirmation starts no run and names the command that edits the criteria") {
       for {
         _                   <- TestConsole.feedLines("n")
-        (code, submittedTo) <- confirm(ClubResolution.Known(alpha))
+        (code, submittedTo) <- confirm(ClubResolution.Known(alpha), None)
         out                 <- output
       } yield assertTrue(
         code == 0,
@@ -95,14 +99,23 @@ object TestRecruitConfirm extends ZIOSpecDefault {
         out.contains(recap.mkString("\n")),
         out.contains("Run with these criteria? [Y/n]"),
         out.contains("Not started. Edit the criteria with: "),
-        out.contains("RecruitmentCriteriaApp set team-alpha default")
+        out.contains("ccas recruitment-criteria set --club team-alpha default")
+      )
+    },
+    test("a declined confirmation against a server other than the default names it in the command") {
+      for {
+        _   <- TestConsole.feedLines("n")
+        _   <- confirm(ClubResolution.Known(alpha), Some("http://localhost:8081"))
+        out <- output
+      } yield assertTrue(
+        out.contains("ccas recruitment-criteria set --server http://localhost:8081 --club team-alpha default")
       )
     },
     test("a confirmed run is submitted, by id, to the club settled while confirming") {
       val renamed = ClubResolution.Renamed(NamedClub(ClubId(1), ClubSlug("team-alpha-now")), alpha.slug)
       for {
         _                   <- TestConsole.feedLines("")
-        (code, submittedTo) <- confirm(renamed)
+        (code, submittedTo) <- confirm(renamed, None)
         out                 <- output
       } yield assertTrue(
         code == 7,
@@ -119,13 +132,13 @@ object TestRecruitConfirm extends ZIOSpecDefault {
         wiring <- TempWiring(routes)
         api    <- FakeCcasServer.api(routes)
         follower = JobFollower(api, 1.minute, 1.milli, 3, showProgress = false, wiring.recentJobsFile)
-        _         <- Dispatcher.scout(wiring, api, follower, recruit, None, interactiveConfirm = true)
+        _         <- Dispatcher.scout(wiring, api, follower, recruit, None, None, interactiveConfirm = true)
         submitted <- sent.get
       } yield assertTrue(submitted.map(_.confirmedCriteriaId) == List(Some(shownId)))
     },
     test("criteria the server has no club for stop the run before it asks") {
       for {
-        exit <- confirm(ClubResolution.NotLocal(byAlphaName)).exit
+        exit <- confirm(ClubResolution.NotLocal(byAlphaName), None).exit
         out  <- output
       } yield assertTrue(exit.isFailure, !out.contains("Run with these criteria?"))
     },
@@ -135,7 +148,7 @@ object TestRecruitConfirm extends ZIOSpecDefault {
         sent  <- Ref.make(List.empty[RecruitmentRequest])
         routes = Routes(criteriaRoute(ClubResolution.Known(alpha), asked), recruitSubmit(sent))
         wiring    <- TempWiring(routes)
-        code      <- Dispatcher.dispatch(wiring)(recruit, None)
+        code      <- Dispatcher.dispatch(wiring)(recruit, None, FakeCcasServer.Url)
         askedFor  <- asked.get
         submitted <- sent.get
         out       <- output

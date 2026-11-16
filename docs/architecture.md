@@ -18,7 +18,7 @@ What each moving part is and how the pieces connect. Reference, not rationale �
 
 ## Applications (`ccas.analysis.apps`)
 
-Runnable apps, each invocable from the CLI and most also submittable as a server job.
+The apps the CLI and the server run, most of them as server jobs.
 
 | App | `JobKind` | Notes |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ Runnable apps, each invocable from the CLI and most also submittable as a server
 | `StatsApp` | `Stats` | per-player contribution stats |
 | `ClubDataApp` | `ClubData` | refreshes club profile data; **no HTTP route** — CLI or scheduler only |
 | `BlacklistApp` | — | not a `JobKind`; runs inline from the CLI or `BlacklistRoutes` |
-| `RecruitmentCriteriaApp` | — | not a `JobKind`; runs inline from the CLI or `RecruitmentCriteriaRoutes` |
+| `RecruitmentCriteriaApp` | — | not a `JobKind`; runs inline from `RecruitmentCriteriaRoutes`, which `ccas recruitment-criteria` calls |
 
 The two inline apps bypass `JobRunner` deliberately: their mutations are small enough to handle synchronously rather than as async jobs.
 
@@ -48,9 +48,9 @@ When several club slugs are given in one CLI invocation, clubs run sequentially 
 
 ### `RecruitmentCriteriaApp`
 
-Subcommands: `set <club-slug> <alias> [--json <file>]`, `show <club-slug> <alias>`, `list <club-slug>`, `sample`.
+No entry point of its own: `ccas recruitment-criteria show | set | list` reaches it through the routes, and the CLI calls a criteria set's alias its name.
 
-A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_alias`'s primary key is `(club_id, alias, since)`, so the same operation covers first-set and later-change; `RecruitmentApp` reads newest-wins via `selectLatest`. The app skips the insert when the capped incoming criteria equals the latest stored, writes the criteria and alias rows in one transaction, retrying a microsecond later when a same-instant set collides on the composite key, requires the club to exist locally (it resolves the club the way a submit does, and never ingests one), and logs a per-field diff on every save. Interactive prompts pre-fill from the existing alias — or `RecruitmentCriteria.defaultDaily` for a new one — preview a diff, and require a `Save? [Y/n]` confirmation. The `CriteriaSpec` DTO (`RecruitmentCriteria` minus `criteria_id`) is the shared wire shape for both the `--json` file and the HTTP body.
+A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_alias`'s primary key is `(club_id, alias, since)`, so the same operation covers first-set and later-change; `RecruitmentApp` reads newest-wins via `selectLatest`. The app skips the insert when the capped incoming criteria equals the latest stored, writes the criteria and alias rows in one transaction, retrying a microsecond later when a same-instant set collides on the composite key, requires the club to exist locally (it resolves the club the way a submit does, and never ingests one), and logs a per-field diff on every save. `ccas recruitment-criteria set` asks for each setting in the CLI (`CriteriaPrompts`), pre-filled from the existing version — or `RecruitmentCriteria.defaultDaily` for a new name — or reads `--file`; it names any lookback the cap shortens, previews a diff (a new name's against the defaults), sends nothing when there is none, asks `Save? [Y/n]` on a terminal, a `--file` save included, and prints the recap the server stored. The `CriteriaSpec` DTO (`RecruitmentCriteria` minus `criteria_id`) is the shared wire shape for the file, which `show --json` prints, and the HTTP body.
 
 ## Server (`ccas.server`)
 
@@ -62,7 +62,7 @@ A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_
 - `JobRoutes` — submit, query and cancel jobs, plus recruitment-result delivery: `GET /api/jobs/{jobId}/recruitment/invited` (paste-ready invited usernames), `GET .../recruitment/found` (still-`Deferred` candidates), `POST .../recruitment/confirm` (flips that run's `Deferred` candidates to `Invited` in one transaction, returning `ConfirmResult{marked, usernames}`), and `GET /api/recruitment/latest/invited` (for a club) + `GET /api/recruitment/runs/{runId}/invited` for reporting a past run. These drive `ccas recruit`'s `--stdout`, interactive-confirm and `--report` modes; an interactive scout sends `autoConfirm=false`, so candidates stay `Deferred` until the operator confirms.
 - `ScheduleRoutes` — CRUD for scheduled jobs.
 - `BlacklistRoutes` — synchronous CRUD for `RecruitmentBlacklist`, delegating to `BlacklistApp`.
-- `RecruitmentCriteriaRoutes` — synchronous `POST /api/recruitment-criteria`, `GET .../{alias}` (the alias's criteria, their `criteria_id` and the `CriteriaRecap` a run under them prints; an interactive `ccas recruit` shows the recap, confirms it, and sends that id back as `confirmedCriteriaId`, so the run refuses any other version and logs one line in place of the recap), `GET /api/recruitment-criteria`, delegating to `RecruitmentCriteriaApp`.
+- `RecruitmentCriteriaRoutes` — synchronous `POST /api/recruitment-criteria`, `GET .../{alias}` (the alias's criteria, their `criteria_id` and the `CriteriaRecap` a run under them prints; an interactive `ccas recruit` shows the recap, confirms it, and sends that id back as `confirmedCriteriaId`, so the run refuses any other version and logs one line in place of the recap), `GET /api/recruitment-criteria`, delegating to `RecruitmentCriteriaApp`; `ccas recruitment-criteria` calls all three.
 - `ManagedClubRoutes` — synchronous CRUD for the managed-club marker, delegating to `ManagedClubApp`.
 - `ClubRoutes` — `GET /api/clubs`, the named clubs the CLI's completion cache reads, and `GET /api/clubs/resolve`, which club a query names without acting on it (`ccas club show`, and `use-club`'s check).
 

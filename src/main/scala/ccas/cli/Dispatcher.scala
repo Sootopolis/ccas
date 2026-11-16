@@ -1,6 +1,5 @@
 package ccas.cli
 
-import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.Base64
@@ -44,31 +43,38 @@ object Dispatcher {
   private val ReconnectBackoff: Duration = 2.seconds
   private val MaxReconnects: Int         = 1000
 
+  /** Runs `cmd` against its server. A command printed for the operator to paste names that server only when it isn't
+    * `defaultServer`, the one a command without `--server` reaches, so a paste reaches the same server either way.
+    */
   private[cli] def dispatch(wiring: CliWiring)(
     cmd: CliCommand.ServerCommand,
-    currentClubOption: Option[String]
-  ): UIO[ExitCode] =
-    CcasApiClient
-      .live(cmd.server)
-      .flatMap { api =>
-        // Bars render only on an interactive terminal (hasTty) and unless `--no-progress` was passed; piped/redirected
-        // output stays plain lines regardless.
-        val jobFollower = JobFollower(
-          api = api,
-          maxWait = MaxJobWait,
-          reconnectBackoff = ReconnectBackoff,
-          maxReconnects = MaxReconnects,
-          showProgress = hasTty && !noProgressFor(cmd),
-          recentJobsFile = wiring.recentJobsFile
-        )
-        runCommand(wiring, api, jobFollower, cmd, currentClubOption) <* refreshClubsCache(wiring, api)
-      }
+    currentClubOption: Option[String],
+    defaultServer: String
+  ): UIO[ExitCode] = {
+    val nonDefaultServerOption = Option.when(cmd.server != defaultServer)(cmd.server)
+    val run = for {
+      api <- CcasApiClient.live(cmd.server)
+      // Bars render only on an interactive terminal (hasTty) and unless `--no-progress` was passed; piped/redirected
+      // output stays plain lines regardless.
+      jobFollower = JobFollower(
+        api = api,
+        maxWait = MaxJobWait,
+        reconnectBackoff = ReconnectBackoff,
+        maxReconnects = MaxReconnects,
+        showProgress = hasTty && !noProgressFor(cmd),
+        recentJobsFile = wiring.recentJobsFile
+      )
+      code <- runCommand(wiring, api, jobFollower, cmd, currentClubOption, nonDefaultServerOption)
+      _    <- refreshClubsCache(wiring, api)
+    } yield code
+    run
       .provide(wiring.clientLayer)
       .catchAll(reportFailure)
       // Last-resort net for unexpected defects (e.g. an invalid opaque-type construction) so the binary prints a
       // clean message instead of dumping a fiber stack trace.
       .catchAllDefect(d => Console.printLineError(s"error: ${d.safeMessage}").orDie.as(1))
       .map(ExitCode(_))
+  }
 
   /** Prints a failed command's error and returns its exit code: a [[CliError]]'s own, otherwise 1. */
   private[cli] def reportFailure(failure: Throwable): UIO[Int] =
@@ -130,7 +136,8 @@ object Dispatcher {
     api: CcasApiClient,
     follower: JobFollower,
     cmd: CliCommand.ServerCommand,
-    currentClubOption: Option[String]
+    currentClubOption: Option[String],
+    nonDefaultServerOption: Option[String]
   ): Task[Int] = cmd match {
     case membership: CliCommand.Membership =>
       for {
@@ -179,9 +186,15 @@ object Dispatcher {
             // positive intent: only `--stdout` (programmatic consumption) auto-confirms from the CLI. An interactive
             // run prompts; any other non-interactive run (e.g. stdout redirected to a file) defers rather than
             // silently inviting: `autoConfirm = Some(false)` for all but `--stdout` has the server leave them Deferred.
-            scout(wiring, api, follower, recruit, currentClubOption, interactiveConfirm = !recruit.stdout && hasTty)
+            val interactiveConfirm = !recruit.stdout && hasTty
+            scout(wiring, api, follower, recruit, currentClubOption, nonDefaultServerOption, interactiveConfirm)
           }
       }
+
+    case show: CliCommand.CriteriaShow => CriteriaCommand.show(wiring, api, currentClubOption, show)
+    case set: CliCommand.CriteriaSet   => CriteriaCommand.set(wiring, api, currentClubOption, set, interactive = hasTty)
+    case list: CliCommand.CriteriaList =>
+      CriteriaCommand.list(wiring, api, currentClubOption, nonDefaultServerOption, list)
 
     case stats: CliCommand.Stats =>
       for {
@@ -483,7 +496,7 @@ object Dispatcher {
 
   // The synchronous club commands resolve on the server just as a submit does, so they settle an ambiguous name, note
   // a changed one and refresh the pointer the same way; a club the server could not act on fails the command.
-  private def actOnClub[A](wiring: CliWiring, currentClubOption: Option[String], target: ClubTarget)(
+  private[cli] def actOnClub[A](wiring: CliWiring, currentClubOption: Option[String], target: ClubTarget)(
     send: ClubTarget => Task[ClubResult[A]]
   ): Task[(NamedClub, A)] =
     settleAndNote(target, noteResolutions(wiring, currentClubOption, target, _))(send)
@@ -742,6 +755,7 @@ object Dispatcher {
     follower: JobFollower,
     recruit: CliCommand.Recruit,
     currentClubOption: Option[String],
+    nonDefaultServerOption: Option[String],
     interactiveConfirm: Boolean
   ): Task[Int] = {
     val criteriaName = recruit.criteriaNameOption.getOrElse(RecruitmentAlias.Default)
@@ -759,7 +773,7 @@ object Dispatcher {
     resolveClub(recruit.club, recruit.clubIdOption, currentClubOption).flatMap { clubTarget =>
       if (interactiveConfirm) {
         // An older server answers no criteria id; the run then logs its full recap, as one that confirmed nothing.
-        confirmCriteria(wiring, api, currentClubOption, clubTarget, criteriaName)(submit)
+        confirmCriteria(wiring, api, currentClubOption, nonDefaultServerOption, clubTarget, criteriaName)(submit)
       } else { submit(clubTarget, None) }
     }
   }
@@ -771,26 +785,20 @@ object Dispatcher {
     wiring: CliWiring,
     api: CcasApiClient,
     currentClubOption: Option[String],
+    nonDefaultServerOption: Option[String],
     target: ClubTarget,
     criteriaName: String
   )(submit: (ClubTarget, Option[Long]) => Task[Int]): Task[Int] =
     for {
       (club, view) <- actOnClub(wiring, currentClubOption, target) { chosen =>
-        api.getJson[ClubResult[CriteriaView]](
-          s"/api/recruitment-criteria/${pathSegment(criteriaName)}?${ClubRequest.queryString(chosen.query)}"
-        )
+        api.getJson[ClubResult[CriteriaView]](CriteriaCommand.viewPath(criteriaName, chosen.query))
       }
-      _      <- ZIO.foreachDiscard(view.recap)(line => Console.printLine(line).orDie)
-      _      <- Console.print("Run with these criteria? [Y/n] ").orDie
-      answer <- Console.readLine.orElseSucceed("n")
+      _         <- ZIO.foreachDiscard(view.recap)(line => Console.printLine(line).orDie)
+      confirmed <- CliPrompt.askYes("Run with these criteria?")
+      edit = CriteriaCommand.setCommand(nonDefaultServerOption, club.slug, criteriaName)
       code <-
-        if (isYes(answer)) { submit(ClubTarget.byId(club.clubId), view.criteriaIdOption) }
-        else {
-          Console.printLine(
-            "Not started. Edit the criteria with: sbt \"runMain ccas.analysis.apps.recruitment.RecruitmentCriteriaApp " +
-              s"set ${ClubSlug.unwrap(club.slug)} $criteriaName\""
-          ).orDie.as(0)
-        }
+        if (confirmed) { submit(ClubTarget.byId(club.clubId), view.criteriaIdOption) }
+        else { Console.printLine(s"Not started. Edit the criteria with: $edit").orDie.as(0) }
     } yield code
 
   private def submitRecruit(
@@ -823,11 +831,6 @@ object Dispatcher {
       _    <- noteResolutions(wiring, currentClubOption, target, List(jobOutcome(result)))
       code <- handleRecruitResult(follower, api, result, recruit.stdout, interactiveConfirm)
     } yield code
-
-  // A criteria name is free text, so it is percent-encoded as a path segment: `URLEncoder` writes a space as `+`,
-  // which a path keeps literally.
-  private def pathSegment(value: String): String =
-    URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20")
 
   // Deliver a completed scout's result per mode. All three route the job log to stderr so stdout carries only the
   // username payload (clean for a pipe or a redirect):
@@ -878,12 +881,12 @@ object Dispatcher {
 
   private def confirmPrompt(api: CcasApiClient, club: String, jobId: String, names: List[String]): Task[Unit] =
     for {
-      _      <- Console.printLine(s"\nFound ${names.size} candidates:").orDie
-      _      <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  ${profileUrlLine(n)}").orDie)
-      _      <- Console.print(s"\nMark all ${names.size} as invited to $club and copy to clipboard? [Y/n] ").orDie
-      answer <- Console.readLine.orElseSucceed("n")
+      _    <- Console.printLine(s"\nFound ${names.size} candidates:").orDie
+      _    <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  ${profileUrlLine(n)}").orDie)
+      _    <- Console.printLine("").orDie
+      mark <- CliPrompt.askYes(s"Mark all ${names.size} as invited to $club and copy to clipboard?")
       _ <-
-        if (isYes(answer)) { confirmAndCopy(api, jobId) }
+        if (mark) { confirmAndCopy(api, jobId) }
         else { Console.printLine(s"Left ${names.size} as deferred; they'll resurface on the next run.").orDie }
     } yield ()
 
@@ -979,10 +982,6 @@ object Dispatcher {
       Console.printLine(block).orDie *>
         ZIO.whenDiscard(hasTty)(copyToClipboard(block, s"${names.size} usernames + profile URLs"))
     }
-
-  // Default-yes: bare Enter or a y* answer confirms; a read failure defaulted to "n" above so this stays false there.
-  private def isYes(answer: String): Boolean =
-    answer == null || answer.trim.isEmpty || answer.trim.toLowerCase.startsWith("y")
 
   // The scout itself succeeded and is persisted; only the follow-up username fetch failed. Don't propagate (that
   // would render as "error: …" and invite a wasteful re-scout) — the invited usernames already streamed in the job

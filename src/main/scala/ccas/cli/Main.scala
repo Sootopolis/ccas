@@ -45,13 +45,15 @@ object Main extends ZIOAppDefault {
     Console.printLineError(s"error: $message").orDie *> exit(ExitCode(2))
 
   private def runResolved(wiring: CliWiring, argList: List[String], cfg: CliConfig): URIO[ZIOAppArgs, Unit] = {
+    // The tree's `--server` default, also `use-club`'s probe target; `dispatch` compares each command's server with it.
+    val defaultServer = cfg.apiUrl.getOrElse(CliCommand.DefaultServer)
     val cliApp = CliApp.make(
       name = "ccas",
       version = BuildInfo.version,
       summary = HelpDoc.Span.text("Chess Club Admin System"),
-      command = CliCommand.command(cfg.apiUrl.getOrElse(CliCommand.DefaultServer)),
+      command = CliCommand.command(defaultServer),
       config = CliCommand.config
-    )(execute(wiring, cfg))
+    )(execute(wiring, cfg, defaultServer))
     CompletionCache.seedClubs(wiring.clubsFile, cfg.defaultClubs) *>
       cliApp.run(argList).foldZIO(
         failure = {
@@ -65,7 +67,9 @@ object Main extends ZIOAppDefault {
       )
   }
 
-  private def execute(wiring: CliWiring, cfg: CliConfig)(cmd: CliCommand): URIO[ZIOAppArgs, ExitCode] = cmd match {
+  private def execute(wiring: CliWiring, cfg: CliConfig, defaultServer: String)(
+    cmd: CliCommand
+  ): URIO[ZIOAppArgs, ExitCode] = cmd match {
     // `Serve(false, Some(_))` never reaches here: `CliCommand.serverUpOptions` rejects it at parse time.
     case CliCommand.Serve(false, _)          => serve(wiring.serverEnvFile)
     case CliCommand.Serve(true, timeout)     => detachServe(wiring, cfg, timeout)
@@ -81,15 +85,16 @@ object Main extends ZIOAppDefault {
         slugs = slugs,
         clear = clear,
         currentClubOption = cfg.currentClubOption,
-        server = cfg.apiUrl.getOrElse(CliCommand.DefaultServer)
+        server = defaultServer
       )
-    case CliCommand.ConfigGet(key)       => ConfigCommand.get(wiring.serverEnvFile)(key)
-    case CliCommand.ConfigSet(key, v)    => ConfigCommand.set(wiring.serverEnvFile)(key, v)
-    case CliCommand.ConfigUnset(key)     => ConfigCommand.unset(wiring.serverEnvFile)(key)
-    case CliCommand.ConfigList(secrets)  => ConfigCommand.list(wiring.serverEnvFile)(secrets)
-    case CliCommand.ConfigPath           => ConfigCommand.path(wiring.serverEnvFile)
-    case CliCommand.ConfigInit           => ConfigCommand.init(wiring.serverEnvFile)
-    case other: CliCommand.ServerCommand => Dispatcher.dispatch(wiring)(other, cfg.currentClubOption)
+    case CliCommand.ConfigGet(key)      => ConfigCommand.get(wiring.serverEnvFile)(key)
+    case CliCommand.ConfigSet(key, v)   => ConfigCommand.set(wiring.serverEnvFile)(key, v)
+    case CliCommand.ConfigUnset(key)    => ConfigCommand.unset(wiring.serverEnvFile)(key)
+    case CliCommand.ConfigList(secrets) => ConfigCommand.list(wiring.serverEnvFile)(secrets)
+    case CliCommand.ConfigPath          => ConfigCommand.path(wiring.serverEnvFile)
+    case CliCommand.ConfigInit          => ConfigCommand.init(wiring.serverEnvFile)
+    case other: CliCommand.ServerCommand =>
+      Dispatcher.dispatch(wiring)(other, cfg.currentClubOption, defaultServer)
   }
 
   // Detached serve: apply the ccas.env overlay first, so a file-only SERVER_PORT reaches the port this parent JVM

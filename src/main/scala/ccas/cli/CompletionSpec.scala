@@ -117,6 +117,24 @@ object CompletionSpec {
       positional = NoArgs
     ),
     Leaf(
+      path = List("recruitment-criteria", "show"),
+      flags = List(server, clubFlag, clubIdFlag, "--json"),
+      valueFlags = List(server, clubFlag, clubIdFlag),
+      positional = Other
+    ),
+    Leaf(
+      path = List("recruitment-criteria", "set"),
+      flags = List(server, clubFlag, clubIdFlag, "--file"),
+      valueFlags = List(server, clubFlag, clubIdFlag, "--file"),
+      positional = Other
+    ),
+    Leaf(
+      path = List("recruitment-criteria", "list"),
+      flags = List(server, clubFlag, clubIdFlag),
+      valueFlags = List(server, clubFlag, clubIdFlag),
+      positional = NoArgs
+    ),
+    Leaf(
       path = List("stats"),
       flags = List(server, "--since", "--until", clubFlag, clubIdFlag, "--no-progress", "--detach"),
       valueFlags = List(server, "--since", "--until", clubFlag, clubIdFlag),
@@ -162,6 +180,11 @@ object CompletionSpec {
 
   val groups: List[Group] = List(
     Group("server", List("up", "down", "status", "list"), "Run and manage the ccas backend HTTP server"),
+    Group(
+      name = "recruitment-criteria",
+      children = List("show", "set", "list"),
+      summary = "Show, set and list the named criteria a club's recruit runs judge players by"
+    ),
     Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
     Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
     Group(
@@ -184,6 +207,7 @@ object CompletionSpec {
       "membership",
       "history",
       "recruit",
+      "recruitment-criteria",
       "stats",
       "jobs",
       "logs",
@@ -235,6 +259,9 @@ object CompletionSpec {
     List("club", "remove")      -> "Remove a club from the ones you manage",
     List("club", "list")        -> "List the clubs you manage with CCAS",
     List("club", "show")        -> "Show which club a name or id reaches, without acting on it",
+    List("recruitment-criteria", "show") -> "Show a club's recruitment criteria, one setting per line",
+    List("recruitment-criteria", "set")  -> "Set a club's recruitment criteria, asking for each setting; a save makes a new version",
+    List("recruitment-criteria", "list") -> "List a club's named recruitment criteria, each with its version",
     List("blacklist", "add")    -> "Blacklist one or more usernames for a club",
     List("blacklist", "list")   -> "List a club's blacklist entries",
     List("blacklist", "remove") -> "Remove a username from a club's blacklist",

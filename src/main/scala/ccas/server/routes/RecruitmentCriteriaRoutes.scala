@@ -13,12 +13,12 @@ object RecruitmentCriteriaRoutes {
 
   // --- Request/response types ---
 
-  private[server] case class SetCriteriaRequest(club: ClubQuery, alias: String, criteria: CriteriaSpec)
+  private[ccas] case class SetCriteriaRequest(club: ClubQuery, alias: String, criteria: CriteriaSpec)
   object SetCriteriaRequest {
     given JsonCodec[SetCriteriaRequest] = DeriveJsonCodec.gen
   }
 
-  private[server] case class SetCriteriaResponse(criteriaId: Long)
+  private[ccas] case class SetCriteriaResponse(criteriaId: Long)
   object SetCriteriaResponse {
     given JsonCodec[SetCriteriaResponse] = DeriveJsonCodec.gen
   }
@@ -36,7 +36,7 @@ object RecruitmentCriteriaRoutes {
     given JsonCodec[CriteriaView] = DeriveJsonCodec.gen
   }
 
-  private[server] case class AliasSummary(alias: String, since: String, criteriaId: Long)
+  private[ccas] case class AliasSummary(alias: String, since: String, criteriaId: Long)
   object AliasSummary {
     given JsonCodec[AliasSummary] = DeriveJsonCodec.gen
   }

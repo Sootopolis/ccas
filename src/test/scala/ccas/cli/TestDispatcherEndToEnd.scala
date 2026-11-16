@@ -108,7 +108,7 @@ object TestDispatcherEndToEnd extends ZIOSpecDefault {
       _ <- ZIO.foreachDiscard(pointerOption.map(CurrentClubRef.parse)) { pointer =>
         ConfigWriter.setCurrentClub(wiring.configFile, pointer.clubIdOption, pointer.slug)
       }
-      code   <- Dispatcher.dispatch(wiring)(cmd, pointerOption)
+      code   <- Dispatcher.dispatch(wiring)(cmd, pointerOption, FakeCcasServer.Url)
       out    <- TestConsole.output
       err    <- TestConsole.outputErr
       config <- CliConfig.load(wiring.configFile).mapError(new RuntimeException(_))

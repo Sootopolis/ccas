@@ -6,20 +6,18 @@ import java.time.Instant
 
 import scala.annotation.tailrec
 
-import zio.{Clock, Console, IO, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
-import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec, JsonDecoder}
+import zio.{Clock, IO, RIO, ZIO}
+import zio.json.{DeriveJsonCodec, JsonCodec, JsonDecoder}
 
-import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
+import ccas.analysis.apps.NamedClub
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo}
-import ccas.utils.ProgressDisplay
-import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
 import ccas.utils.errors.{safeMessage, safeMessageNaming, BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
-/** Sets recruitment criteria for a club's alias from CLI (interactive prompts or a JSON file) or — via
-  * [[ccas.server.routes.RecruitmentCriteriaRoutes]] — from an HTTP request.
+/** Sets, shows and lists a club's named recruitment criteria for [[ccas.server.routes.RecruitmentCriteriaRoutes]],
+  * which `ccas recruitment-criteria` calls. A name is an alias row; "alias" stays the schema's word, not the operator's.
   *
   * A "set" is a versioned insert: criteria rows are immutable and `recruitment_alias` is keyed by
   * `(club_id, alias, since)`, so both first-set and later-change insert a fresh criteria row plus a new alias row
@@ -27,74 +25,19 @@ import ccas.utils.sql.PostgresClient.withTransaction
   * delete path. Every operation takes a club already resolved, and so already ingested, which recruitment config
   * assumes anyway.
   */
-object RecruitmentCriteriaApp extends ZIOAppDefault {
+object RecruitmentCriteriaApp {
   val MaxAliasLength: Int               = 64
   private val MaxJsonBytes: Long        = 1L * 1024 * 1024
   private val MaxSinceRetries: Int      = 5
   private val PgUniqueViolation: String = "23505"
 
-  private val help =
-    s"""Usage: RecruitmentCriteriaApp <command> [args]
-       |
-       |Commands:
-       |  set <club-slug> <alias> [--json <file>]        Set criteria for an alias (interactive prompts, or load JSON)
-       |  show <club-slug> <alias>                       Show the current criteria for an alias
-       |  list <club-slug>                               List all aliases for a club
-       |  sample                                         Print defaultDaily as JSON (template for --json)
-       |
-       |Alias must be 1-$MaxAliasLength characters after trimming.""".stripMargin
-
-  override def run: RIO[ZIOAppArgs & Scope, Unit] =
-    ZIOAppArgs.getArgs.map(_.toList).flatMap {
-      case "sample" :: _ =>
-        Console.printLine(CriteriaSpec.fromCriteria(RecruitmentCriteria.defaultDaily).toJsonPretty)
-      // Only a command that names a club needs the Chess.com client, which resolving the club may ask.
-      case args @ ("set" | "show" | "list") :: _ =>
-        ProgressDisplay.installed(showProgress = true) {
-          clubCommand(args).provideSomeAuto(
-            ChessComClient.live("criteria"),
-            HttpClientLayer.live,
-            BodyStore.live,
-            PostgresClient.live(onInit = Tables.ensureTablesOnInit)
-          )
-        }
-      case _ => ZIO.fail(BadRequestException(help))
-    }
-
-  private def clubCommand(args: List[String]): RIO[ChessComClient & PostgresClient, Unit] =
-    args match {
-      case "set" :: clubStr :: alias :: rest =>
-        for {
-          club <- resolve(clubStr)
-          criteriaOption <- rest match {
-            case "--json" :: path :: Nil => loadFromJson(path).map(Some(_))
-            case Nil                     => promptCriteria(club, alias)
-            case _                       => ZIO.fail(BadRequestException(help))
-          }
-          _ <- criteriaOption match {
-            case Some(c) => set(club, alias, c).flatMap(id => Console.printLine(s"criteria_id=$id"))
-            case None    => Console.printLine("Aborted; no changes.")
-          }
-        } yield ()
-      case "show" :: clubStr :: alias :: _ =>
-        resolve(clubStr).flatMap(show(_, alias)).flatMap(printCriteria)
-      case "list" :: clubStr :: _ =>
-        resolve(clubStr).flatMap(club => list(club.clubId)).flatMap(printAliases)
-      case _ => ZIO.fail(BadRequestException(help))
-    }
-
-  private def resolve(clubStr: String): RIO[ChessComClient & PostgresClient, NamedClub] =
-    ClubResolution.resolveRunnable(ClubQuery.BySlug(ClubSlug.wrap(clubStr)))
-
-  // --- Core (reused by RecruitmentCriteriaRoutes) ---
-
   /** Refuses what [[set]] would, so a route can refuse it before resolving the club, which may ask Chess.com. */
   def validateSet(alias: String, criteria: RecruitmentCriteria): IO[BadRequestException, Unit] = {
     val a = alias.trim
     for {
-      _ <- ZIO.whenDiscard(a.isEmpty)(ZIO.fail(BadRequestException("alias must not be empty")))
+      _ <- ZIO.whenDiscard(a.isEmpty)(ZIO.fail(BadRequestException("criteria name must not be empty")))
       _ <- ZIO.whenDiscard(a.length > MaxAliasLength) {
-        ZIO.fail(BadRequestException(s"alias must be <= $MaxAliasLength chars (got ${a.length})"))
+        ZIO.fail(BadRequestException(s"criteria name must be <= $MaxAliasLength chars (got ${a.length})"))
       }
       _ <- ZIO.fromEither(criteria.capped.validate).mapError(BadRequestException(_))
     } yield ()
@@ -128,10 +71,10 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
     } yield criteriaId
   }
 
-  /** Per-field "before → after" lines for a save. Returns `List("(new alias)")` when there is no prior version.
-    * Used by both the core save log and the interactive confirmation preview.
+  /** Per-field "before → after" lines for a save, or `List("(new criteria)")` when there is no prior version. The save
+    * logs them, and `ccas recruitment-criteria set` shows them before it saves.
     */
-  private[recruitment] def diffLines(before: Option[RecruitmentCriteria], after: RecruitmentCriteria): List[String] = {
+  private[ccas] def diffLines(before: Option[RecruitmentCriteria], after: RecruitmentCriteria): List[String] = {
     @tailrec
     def disp(x: Any): String = x match {
       case None         => "none"
@@ -143,7 +86,7 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
       if (b == a) { None }
       else { Some(s"$label: ${disp(b)} → ${disp(a)}") }
     before match {
-      case None => List("(new alias)")
+      case None => List("(new criteria)")
       case Some(b) =>
         List(
           line("minDaysSinceRegistration", b.minDaysSinceRegistration, after.minDaysSinceRegistration),
@@ -221,7 +164,7 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
 
   // --- JSON input ---
 
-  private[recruitment] def loadFromJson(path: String): RIO[Any, RecruitmentCriteria] =
+  private[ccas] def loadFromJson(path: String): RIO[Any, RecruitmentCriteria] =
     for {
       file <- ZIO.attempt(Path.of(path)).mapError(e => BadRequestException(s"invalid path: ${e.safeMessage}"))
       size <- ZIO.attemptBlocking(Files.size(file))
@@ -233,167 +176,10 @@ object RecruitmentCriteriaApp extends ZIOAppDefault {
         .mapError(e => BadRequestException(s"cannot read ${e.safeMessageNaming(file)}"))
       spec <- ZIO.fromEither(JsonDecoder[CriteriaSpec].decodeJson(content)).mapError(BadRequestException(_))
     } yield spec.toCriteria
-
-  // --- Output ---
-
-  private def printCriteria(c: RecruitmentCriteria): RIO[Any, Unit] =
-    Console.printLine(CriteriaSpec.fromCriteria(c).toJsonPretty)
-
-  private def printAliases(aliases: List[RecruitmentAlias]): RIO[Any, Unit] =
-    if (aliases.isEmpty) { Console.printLine("No aliases set.") }
-    else {
-      ZIO.foreachDiscard(aliases) { a =>
-        Console.printLine(s"  ${a.alias}  (since ${a.since}, criteria_id=${a.criteriaId})")
-      }
-    }
-
-  // --- Interactive prompts ---
-
-  private def prompt(label: String): RIO[Any, String] =
-    (Console.print(label) *> Console.readLine).map(_.trim)
-
-  private def promptOpt[A](
-    label: String,
-    current: Option[A],
-    show: A => String,
-    parse: String => Either[String, A]
-  ): RIO[Any, Option[A]] = {
-    val shown = current.fold("none")(show)
-    prompt(s"$label [$shown] (Enter=keep, - =none): ").flatMap {
-      case ""  => ZIO.succeed(current)
-      case "-" => ZIO.none
-      case s =>
-        parse(s) match {
-          case Right(v)  => ZIO.some(v)
-          case Left(err) => Console.printLine(s"  $err") *> promptOpt(label, current, show, parse)
-        }
-    }
-  }
-
-  private def promptOptInt(label: String, current: Option[Int]): RIO[Any, Option[Int]] =
-    promptOpt(label, current, _.toString, s => s.toIntOption.toRight(s"'$s' is not an integer"))
-
-  private def promptOptDouble(label: String, current: Option[Double]): RIO[Any, Option[Double]] =
-    promptOpt(label, current, _.toString, s => s.toDoubleOption.toRight(s"'$s' is not a number"))
-
-  private def promptOptElo(label: String, current: Option[Elo]): RIO[Any, Option[Elo]] =
-    promptOpt(
-      label = label,
-      current = current,
-      show = e => Elo.unwrap(e).toString,
-      parse = s =>
-        s.toIntOption.toRight(s"'$s' is not an integer").flatMap { i =>
-          if (i < 0 || i > Short.MaxValue) Left(s"must be in [0, ${Short.MaxValue}] (got $i)")
-          else Right(Elo(i.toShort))
-        }
-    )
-
-  private def promptBool(label: String, current: Boolean): RIO[Any, Boolean] =
-    prompt(s"$label [$current] (y/n, Enter=keep): ").flatMap { s =>
-      s.toLowerCase match {
-        case ""                         => ZIO.succeed(current)
-        case "y" | "yes" | "true" | "t" => ZIO.succeed(true)
-        case "n" | "no" | "false" | "f" => ZIO.succeed(false)
-        case _                          => Console.printLine("  enter y or n") *> promptBool(label, current)
-      }
-    }
-
-  private def promptStrList(label: String, current: List[String]): RIO[Any, List[String]] =
-    prompt(s"$label [${current.mkString(",")}] (comma-separated, Enter=keep, - =empty): ").map {
-      case ""  => current
-      case "-" => Nil
-      case s   => s.split(',').map(_.trim).filter(_.nonEmpty).toList
-    }
-
-  private def promptClubIdList(label: String, current: List[ClubId]): RIO[Any, List[ClubId]] = {
-    val shown = current.map(ClubId.unwrap).mkString(",")
-    prompt(s"$label [$shown] (comma-separated ids, Enter=keep, - =empty): ").flatMap {
-      case ""  => ZIO.succeed(current)
-      case "-" => ZIO.succeed(Nil)
-      case s =>
-        val parsed = s.split(',').map(_.trim).filter(_.nonEmpty).toList.map { tok =>
-          tok.toLongOption.toRight(s"'$tok' is not a valid id")
-            .flatMap(l => if (l < 0) Left(s"club id must be >= 0 (got $l)") else Right(ClubId(l)))
-        }
-        parsed.partitionMap(identity) match {
-          case (Nil, ids) => ZIO.succeed(ids)
-          case (errs, _)  => Console.printLine(s"  ${errs.mkString("; ")}") *> promptClubIdList(label, current)
-        }
-    }
-  }
-
-  private def promptCriteria(club: NamedClub, alias: String): RIO[PostgresClient, Option[RecruitmentCriteria]] = {
-    val a = alias.trim
-    for {
-      existing <- latestCriteria(club.clubId, a).map(_.map(_._2))
-      base = existing.getOrElse(RecruitmentCriteria.defaultDaily)
-      _ <- Console.printLine(
-        if (existing.isDefined) { s"Editing criteria for alias '$a' (Enter keeps the current value)." }
-        else { s"New alias '$a' — defaults shown from defaultDaily (Enter keeps)." }
-      )
-      minDaysSinceRegistration   <- promptOptInt("minDaysSinceRegistration", base.minDaysSinceRegistration)
-      daysSinceLastInvited       <- promptOptInt("daysSinceLastInvited", base.daysSinceLastInvited)
-      daysSinceRejected          <- promptOptInt("daysSinceRejected", base.daysSinceRejected)
-      nationalityExclude         <- promptBool("nationalityExclude", base.nationalityExclude)
-      nationalityCountries       <- promptStrList("nationalityCountries", base.nationalityCountries)
-      excludeClubs               <- promptClubIdList("excludeClubs", base.excludeClubs)
-      maxClubs                   <- promptOptInt("maxClubs", base.maxClubs)
-      excludeSourceAdmins        <- promptBool("excludeSourceAdmins", base.excludeSourceAdmins)
-      avoidAdminMinClubSize      <- promptOptInt("avoidAdminMinClubSize", base.avoidAdminMinClubSize)
-      excludeFormerMembers       <- promptBool("excludeFormerMembers", base.excludeFormerMembers)
-      dailyMinElo                <- promptOptElo("dailyMinElo", base.dailyMinElo)
-      dailyMaxElo                <- promptOptElo("dailyMaxElo", base.dailyMaxElo)
-      dailyMinScoreRate          <- promptOptDouble("dailyMinScoreRate", base.dailyMinScoreRate)
-      dailyMaxScoreRate          <- promptOptDouble("dailyMaxScoreRate", base.dailyMaxScoreRate)
-      dailyMinGamesFinished      <- promptOptInt("dailyMinGamesFinished", base.dailyMinGamesFinished)
-      dailyMinTmGamesFinished    <- promptOptInt("dailyMinTmGamesFinished", base.dailyMinTmGamesFinished)
-      dailyMaxTimeoutPercent     <- promptOptDouble("dailyMaxTimeoutPercent", base.dailyMaxTimeoutPercent)
-      dailyMaxTmTimeoutPercent   <- promptOptDouble("dailyMaxTmTimeoutPercent", base.dailyMaxTmTimeoutPercent)
-      dailyMaxHoursPerMove       <- promptOptInt("dailyMaxHoursPerMove", base.dailyMaxHoursPerMove)
-      dailyMinOngoingGames       <- promptOptInt("dailyMinOngoingGames", base.dailyMinOngoingGames)
-      dailyMaxOngoingGames       <- promptOptInt("dailyMaxOngoingGames", base.dailyMaxOngoingGames)
-      dailyMinOngoingTeamMatches <- promptOptInt("dailyMinOngoingTeamMatches", base.dailyMinOngoingTeamMatches)
-      candidate = RecruitmentCriteria(
-        criteriaId = 0,
-        minDaysSinceRegistration = minDaysSinceRegistration,
-        daysSinceLastInvited = daysSinceLastInvited,
-        daysSinceRejected = daysSinceRejected,
-        nationalityExclude = nationalityExclude,
-        nationalityCountries = nationalityCountries,
-        excludeClubs = excludeClubs,
-        maxClubs = maxClubs,
-        excludeSourceAdmins = excludeSourceAdmins,
-        avoidAdminMinClubSize = avoidAdminMinClubSize,
-        excludeFormerMembers = excludeFormerMembers,
-        dailyMinElo = dailyMinElo,
-        dailyMaxElo = dailyMaxElo,
-        dailyMinScoreRate = dailyMinScoreRate,
-        dailyMaxScoreRate = dailyMaxScoreRate,
-        dailyMinGamesFinished = dailyMinGamesFinished,
-        dailyMinTmGamesFinished = dailyMinTmGamesFinished,
-        dailyMaxTimeoutPercent = dailyMaxTimeoutPercent,
-        dailyMaxTmTimeoutPercent = dailyMaxTmTimeoutPercent,
-        dailyMaxHoursPerMove = dailyMaxHoursPerMove,
-        dailyMinOngoingGames = dailyMinOngoingGames,
-        dailyMaxOngoingGames = dailyMaxOngoingGames,
-        dailyMinOngoingTeamMatches = dailyMinOngoingTeamMatches
-      )
-      ds = diffLines(existing, candidate.capped)
-      _ <- Console.printLine("")
-      _ <- Console.printLine("--- Changes ---")
-      _ <- {
-        if (ds.isEmpty) { Console.printLine("  (no changes)") }
-        else { ZIO.foreachDiscard(ds)(d => Console.printLine(s"  $d")) }
-      }
-      confirm <- prompt("Save? [Y/n]: ").map(_.toLowerCase).map(s => s.isEmpty || s == "y" || s == "yes")
-    } yield
-      if (confirm) { Some(candidate) }
-      else { None }
-  }
 }
 
-/** Wire shape for `RecruitmentCriteria` minus the server-assigned `criteria_id` surrogate. Shared by the CLI
-  * `--json <file>` path and the HTTP route body.
+/** Wire shape for `RecruitmentCriteria` minus the server-assigned `criteria_id` surrogate: the HTTP route body, and
+  * the file `ccas recruitment-criteria show --json` prints and `set --file` reads.
   */
 final case class CriteriaSpec(
   minDaysSinceRegistration: Option[Int],
