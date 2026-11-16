@@ -8,11 +8,12 @@ import zio.http.{handler, string, Method, Request, Response, Routes, Status}
 import zio.json.{DecoderOps, EncoderOps, JsonCodec}
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
-import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubRef, ClubResolution, NamedClub}
 import ccas.analysis.apps.recruitment.CriteriaSpec
 import ccas.analysis.tables.RecruitmentCriteria
-import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.server.routes.ClubResult
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo}
+import ccas.server.routes.{ClubRequest, ClubResult}
+import ccas.server.routes.ClubRoutes.ClubInfo
 import ccas.server.routes.RecruitmentCriteriaRoutes.{
   AliasSummary,
   CriteriaView,
@@ -27,6 +28,7 @@ import ccas.server.routes.RecruitmentCriteriaRoutes.{
 object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
 
   private val alpha = NamedClub(ClubId(1), ClubSlug("team-alpha"))
+  private val beta  = NamedClub(ClubId(2), ClubSlug("team-beta"))
   private val since = Instant.parse("2026-03-18T14:02:00Z")
   private val stored: CriteriaSpec =
     CriteriaSpec.fromCriteria(
@@ -39,6 +41,7 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
     criteria: Ref[Map[String, Version]],
     posts: Ref[List[SetCriteriaRequest]],
     requests: Ref[Int],
+    lookups: Ref[Int],
     interloper: Boolean
   ) {
     def routes: Routes[Any, Response] = Routes(
@@ -55,6 +58,12 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
         } yield names.get(name).fold(Response.status(Status.NotFound)) { v =>
           answer(CriteriaView(Some(v.id), v.spec, recap(name, v)))
         }
+      },
+      Method.GET / "api" / "clubs" / "resolve" -> handler { (req: Request) =>
+        val queryEither = ClubRequest.fromParams(req.queryParams("clubId"), req.queryParams("slug"))
+        (requests.update(_ + 1) *> lookups.update(_ + 1)).as(
+          queryEither.fold(_ => Response.status(Status.BadRequest), resolved)
+        )
       },
       Method.POST / "api" / "recruitment-criteria" -> handler { (req: Request) =>
         for {
@@ -74,6 +83,43 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
     )
   }
 
+  // `team-alpha` and `team-beta` are known; `old-name` reaches a club that has since lost it, `moved-name` has passed
+  // to team-beta, `shared` was held by two, and looking up `flaky`, `9999` or club #500 fails. Anything else is unknown.
+  private def resolved(query: ClubQuery): Response = {
+    def unnamed(resolution: ClubResolution) =
+      FakeCcasServer.json(ClubResult[ClubInfo](query.describe, resolution, None))
+    query match {
+      case ClubQuery.ById(id) if id == ClubId(500) => Response.status(Status.InternalServerError)
+      case ClubQuery.BySlug(slug) if Set("flaky", "9999").contains(ClubSlug.unwrap(slug)) =>
+        Response.status(Status.InternalServerError)
+      case ClubQuery.BySlug(slug) if slug == ClubSlug("moved-name") =>
+        unnamed(
+          ClubResolution.Moved(beta, ClubSlug("moved-name"), List(ClubRef(ClubId(6), Some(ClubSlug("old-holder")))))
+        )
+      case ClubQuery.BySlug(slug) if slug == ClubSlug("old-name") =>
+        unnamed(ClubResolution.RenamedNameless(ClubId(5), ClubSlug("old-name")))
+      case ClubQuery.BySlug(slug) if slug == ClubSlug("shared") =>
+        unnamed(
+          ClubResolution.Ambiguous(
+            ClubSlug("shared"),
+            List(ClubRef(ClubId(3), Some(ClubSlug("now-c"))), ClubRef(ClubId(4), None))
+          )
+        )
+      case _ =>
+        val knownOption = List(alpha, beta).find { club =>
+          query match {
+            case ClubQuery.ById(id)     => club.clubId == id
+            case ClubQuery.BySlug(slug) => club.slug == slug
+          }
+        }
+        knownOption.fold(unnamed(ClubResolution.NotLocal(query))) { club =>
+          FakeCcasServer.json(
+            ClubResult(ClubSlug.unwrap(club.slug), ClubResolution.Known(club), Some(ClubInfo(club.slug, "Club")))
+          )
+        }
+    }
+  }
+
   private def answer[A: JsonCodec](value: A): Response =
     FakeCcasServer.json(ClubResult(ClubQuery.BySlug(alpha.slug).describe, ClubResolution.Known(alpha), Some(value)))
 
@@ -91,7 +137,8 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
       criteria <- Ref.make(names)
       posts    <- Ref.make(List.empty[SetCriteriaRequest])
       requests <- Ref.make(0)
-    } yield Fake(criteria, posts, requests, interloper)
+      lookups  <- Ref.make(0)
+    } yield Fake(criteria, posts, requests, lookups, interloper)
 
   private val withDefault = Map("default" -> Version(1, stored, since))
 
@@ -132,6 +179,20 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
   private val NationalityExclude   = 3
   private val DailyMinElo          = 10
   private val DailyMaxElo          = 11
+  private val ExcludeClubs         = 5
+  private val DailyMinScoreRate    = 12
+  private val DailyMaxScoreRate    = 13
+
+  // [[answers]], with the setting at `index` answered `refused` and then, asked again, `accepted`.
+  private def answersAskedAgain(
+    index: Int,
+    refused: String,
+    accepted: String,
+    changed: (Int, String)*
+  ): List[String] = {
+    val lines = answers(changed*)
+    lines.take(index) ++ List(refused, accepted) ++ lines.drop(index + 1)
+  }
 
   // `json` as a criteria file for `use`, deleted afterwards.
   private def withCriteriaFile[A](json: String)(use: String => Task[A]): Task[A] =
@@ -143,6 +204,8 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
     exit.causeOption.flatMap(_.failureOption).collect { case e: CliError => e }
 
   private def output: UIO[String] = TestConsole.output.map(_.mkString)
+
+  private def errors: UIO[String] = TestConsole.outputErr.map(_.mkString)
 
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentCriteriaCommand")(
     test("show prints the recap of the criteria named") {
@@ -287,6 +350,173 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
         posts.map(_.criteria.nationalityExclude) == List(true)
       )
     },
+    test("a value out of range is asked again at once, and the other answers are kept") {
+      val lines = answersAskedAgain(DailyMinScoreRate, "55", "0.55", MaxClubs -> "25")
+      for {
+        _     <- TestConsole.feedLines((lines :+ "y")*)
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+      } yield assertTrue(
+        out.contains("  dailyMinScoreRate must be in [0, 1] (got 55.0)\ndailyMinScoreRate ["),
+        posts.map(_.criteria) == List(stored.copy(maxClubs = Some(25), dailyMinScoreRate = Some(0.55)))
+      )
+    },
+    test("a negative count is asked again") {
+      for {
+        _     <- TestConsole.feedLines((answersAskedAgain(MaxClubs, "-1", "25") :+ "y")*)
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+      } yield assertTrue(
+        out.contains("  maxClubs must be >= 0 (got -1)\nmaxClubs ["),
+        posts.map(_.criteria.maxClubs) == List(Some(25))
+      )
+    },
+    test("a max below its min is asked again at the max, a kept one included") {
+      val lines = answersAskedAgain(DailyMaxScoreRate, "", "-", DailyMinScoreRate -> "0.9")
+      for {
+        _     <- TestConsole.feedLines((lines :+ "y")*)
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+      } yield assertTrue(
+        out.contains("  dailyScoreRate min (0.9) must be <= max (0.875)\ndailyMaxScoreRate ["),
+        posts.map(_.criteria) == List(stored.copy(dailyMinScoreRate = Some(0.9), dailyMaxScoreRate = None))
+      )
+    },
+    test("an Elo max typed below its min is asked again at the max") {
+      val lines = answersAskedAgain(DailyMaxElo, "1500", "2200", DailyMinElo -> "2000")
+      for {
+        _     <- TestConsole.feedLines((lines :+ "y")*)
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+      } yield assertTrue(
+        out.contains("  dailyElo min (2000) must be <= max (1500)\ndailyMaxElo ["),
+        posts.map(p => (p.criteria.dailyMinElo, p.criteria.dailyMaxElo)) ==
+          List((Some(Elo(2000.toShort)), Some(Elo(2200.toShort))))
+      )
+    },
+    test("excluded clubs are shown and taken as slugs, named in the preview, and saved as ids") {
+      val stays     = List(beta.clubId, ClubId(99), ClubId(500))
+      val excluding = Map("default" -> Version(1, stored.copy(excludeClubs = stays), since))
+      for {
+        _       <- TestConsole.feedLines((answers(ExcludeClubs -> "team-alpha, #7") :+ "y")*)
+        f       <- fake(excluding)
+        _       <- set(f, Nil, None, interactive = true)
+        posts   <- f.posts.get
+        out     <- output
+        lookups <- f.lookups.get
+      } yield assertTrue(
+        out.contains("excludeClubs [team-beta,#99,#500] (comma-separated slugs or #ids"),
+        out.contains("  excludeClubs: [team-beta,#99,#500] → [team-alpha,#7]\n"),
+        // Three clubs shown, one slug typed, and #7, the one club the prompt never named, for the preview.
+        lookups == 5,
+        posts.map(_.criteria.excludeClubs) == List(List(alpha.clubId, ClubId(7)))
+      )
+    },
+    test("a name a club has since lost excludes that club, and a name several held asks for its #<id>") {
+      for {
+        _     <- TestConsole.feedLines((answersAskedAgain(ExcludeClubs, "shared", "old-name") :+ "y")*)
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+        err   <- errors
+      } yield assertTrue(
+        out.contains(
+          "  no club holds shared now, and it was held by #3 (now now-c), #4 (no known name); give the one you mean " +
+            "as #<id>\nexcludeClubs ["
+        ),
+        err.contains("note: 'old-name' is a former name of club #5, which holds none now\n"),
+        posts.map(_.criteria.excludeClubs) == List(List(ClubId(5)))
+      )
+    },
+    test("a name that has passed to another club is noted as club commands note it, and the club cache cleared") {
+      val command = CliCommand.CriteriaSet(FakeCcasServer.Url, Some("team-alpha"), None, None, Nil)
+      for {
+        _      <- TestConsole.feedLines((answers(ExcludeClubs -> "moved-name") :+ "y")*)
+        f      <- fake(withDefault)
+        wiring <- TempWiring(f.routes)
+        api    <- FakeCcasServer.api(f.routes)
+        _      <- ZIO.attemptBlocking(Files.createDirectories(wiring.clubsFile.getParent))
+        _      <- ZIO.attemptBlocking(Files.writeString(wiring.clubsFile, "moved-name\n"))
+        _      <- CriteriaCommand.set(wiring, api, None, command, interactive = true)
+        posts  <- f.posts.get
+        err    <- errors
+        cached <- ZIO.attemptBlocking(Files.exists(wiring.clubsFile))
+      } yield assertTrue(
+        err.contains(
+          "note: 'moved-name' now belongs to club #2 (now team-beta) on Chess.com, not to #6 (now old-holder); " +
+            "using the club that holds it\n"
+        ),
+        !cached,
+        posts.map(_.criteria.excludeClubs) == List(List(beta.clubId))
+      )
+    },
+    test("a lookup the server fails is named and asked again, and the answers so far are kept") {
+      for {
+        _ <- TestConsole.feedLines((answersAskedAgain(ExcludeClubs, "flaky", "team-beta", MaxClubs -> "25") :+ "y")*)
+        f <- fake(withDefault)
+        _ <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+      } yield assertTrue(
+        out.contains("  couldn't look flaky up: "),
+        posts.map(p => (p.criteria.excludeClubs, p.criteria.maxClubs)) == List((List(beta.clubId), Some(25)))
+      )
+    },
+    test("digits whose lookup failed are not taken for a mistyped id") {
+      for {
+        _   <- TestConsole.feedLines((answersAskedAgain(ExcludeClubs, "9999", "team-beta") :+ "y")*)
+        f   <- fake(withDefault)
+        _   <- set(f, Nil, None, interactive = true)
+        out <- output
+      } yield assertTrue(out.contains("  couldn't look 9999 up: "), !out.contains("type #9999"))
+    },
+    test("digits are a slug, and an id takes its #") {
+      for {
+        _     <- TestConsole.feedLines((answersAskedAgain(ExcludeClubs, "2048", "#2048") :+ "y")*)
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+      } yield assertTrue(
+        out.contains("  Club not found: 2048 (for club id 2048, type #2048)\nexcludeClubs ["),
+        posts.map(_.criteria.excludeClubs) == List(List(ClubId(2048)))
+      )
+    },
+    test("a name's note is shown only once every name on the line is found") {
+      for {
+        _     <- TestConsole.feedLines((answersAskedAgain(ExcludeClubs, "moved-name, nobody", "moved-name") :+ "y")*)
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+        err   <- errors
+      } yield assertTrue(
+        out.contains("  Club not found: nobody\nexcludeClubs ["),
+        "note: 'moved-name'".r.findAllIn(err).size == 1,
+        posts.map(_.criteria.excludeClubs) == List(List(beta.clubId))
+      )
+    },
+    test("an excluded club the server cannot find is named and asked again") {
+      for {
+        _     <- TestConsole.feedLines((answersAskedAgain(ExcludeClubs, "nobody", "team-beta") :+ "y")*)
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+      } yield assertTrue(
+        out.contains("  Club not found: nobody\nexcludeClubs ["),
+        posts.map(_.criteria.excludeClubs) == List(List(beta.clubId))
+      )
+    },
     test("set with no changes sends nothing") {
       for {
         _     <- TestConsole.feedLines(answers()*)
@@ -352,11 +582,12 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
         )
       )
     },
-    test("criteria the server would refuse are refused before the operator is asked to save") {
+    test("criteria from a file the server would refuse are refused before the operator is asked to save") {
+      val refused = stored.copy(dailyMinElo = Some(Elo(1800.toShort)), dailyMaxElo = Some(Elo(1500.toShort)))
       for {
-        _     <- TestConsole.feedLines((answers(DailyMinElo -> "1800", DailyMaxElo -> "1500") :+ "y")*)
+        _     <- TestConsole.feedLines("y")
         f     <- fake(withDefault)
-        exit  <- set(f, Nil, None, interactive = true).exit
+        exit  <- withCriteriaFile(refused.toJson)(file => set(f, Nil, Some(file), interactive = true).exit)
         posts <- f.posts.get
         out   <- output
       } yield assertTrue(

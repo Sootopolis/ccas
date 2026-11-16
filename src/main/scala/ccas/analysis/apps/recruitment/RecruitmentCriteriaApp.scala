@@ -59,7 +59,7 @@ object RecruitmentCriteriaApp {
             .logInfo(s"Criteria for alias '$a' of club ${club.slug} unchanged (criteria_id=$id); skipping insert")
             .as(id)
         case _ =>
-          val changes = diffLines(current.map(_._2), capped)
+          val changes = diffLines(current.map(_._2), capped, clubId => ClubId.unwrap(clubId).toString)
           for {
             now <- Clock.instant
             id  <- insertWithSinceRetry(club.clubId, a, capped, now, MaxSinceRetries)
@@ -72,9 +72,13 @@ object RecruitmentCriteriaApp {
   }
 
   /** Per-field "before → after" lines for a save, or `List("(new criteria)")` when there is no prior version. The save
-    * logs them, and `ccas recruitment-criteria set` shows them before it saves.
+    * logs them, and `ccas recruitment-criteria set` shows them before it saves, each excluded club as `clubName` gives it.
     */
-  private[ccas] def diffLines(before: Option[RecruitmentCriteria], after: RecruitmentCriteria): List[String] = {
+  private[ccas] def diffLines(
+    before: Option[RecruitmentCriteria],
+    after: RecruitmentCriteria,
+    clubName: ClubId => String
+  ): List[String] = {
     @tailrec
     def disp(x: Any): String = x match {
       case None         => "none"
@@ -94,7 +98,7 @@ object RecruitmentCriteriaApp {
           line("daysSinceRejected", b.daysSinceRejected, after.daysSinceRejected),
           line("nationalityExclude", b.nationalityExclude, after.nationalityExclude),
           line("nationalityCountries", b.nationalityCountries, after.nationalityCountries),
-          line("excludeClubs", b.excludeClubs, after.excludeClubs),
+          line("excludeClubs", b.excludeClubs.map(clubName), after.excludeClubs.map(clubName)),
           line("maxClubs", b.maxClubs, after.maxClubs),
           line("excludeSourceAdmins", b.excludeSourceAdmins, after.excludeSourceAdmins),
           line("avoidAdminMinClubSize", b.avoidAdminMinClubSize, after.avoidAdminMinClubSize),
