@@ -556,14 +556,14 @@ object TestServerBoot extends ZIOSpecDefault {
         assertTrue(
           BootGuard
             .question(resolved = Right(remote), detachedChild = false)
-            .contains("Boot against ep-x.neon.tech/neondb? [y/N] ")
+            .contains("Boot against ep-x.neon.tech/neondb?")
         )
       },
       test("a database whose address can't be read asks before booting") {
         assertTrue(
           BootGuard
             .question(resolved = Right(None), detachedChild = false)
-            .contains("Boot against a database whose address can't be read from the configuration? [y/N] ")
+            .contains("Boot against a database whose address can't be read from the configuration?")
         )
       },
       test("a detached child never asks, since its parent did") {

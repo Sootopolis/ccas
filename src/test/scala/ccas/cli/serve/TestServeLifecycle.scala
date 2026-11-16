@@ -580,7 +580,7 @@ object TestServeLifecycle extends ZIOSpecDefault {
       test("a server on any other database asks, naming its port, pid and database") {
         assertTrue(
           ServerStop.stopQuestion(port = 8080, pid = 4821L, databaseOption = Some("ep-x.neon.tech/neondb")).contains(
-            "Stop the server on 127.0.0.1:8080 (pid 4821, db ep-x.neon.tech/neondb)? [y/N] "
+            "Stop the server on 127.0.0.1:8080 (pid 4821, db ep-x.neon.tech/neondb)?"
           )
         )
       },

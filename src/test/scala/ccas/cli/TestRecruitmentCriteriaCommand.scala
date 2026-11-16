@@ -129,6 +129,7 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
     changed.foldLeft(List.fill(SettingCount)("")) { case (lines, (index, value)) => lines.updated(index, value) }
   private val MaxClubs             = 6
   private val DaysSinceLastInvited = 1
+  private val NationalityExclude   = 3
   private val DailyMinElo          = 10
   private val DailyMaxElo          = 11
 
@@ -269,6 +270,21 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
           "--- Changes ---\n  (new criteria; what differs from the defaults)\n  maxClubs: 40 → 25\n" +
             "Saving makes a new version"
         )
+      )
+    },
+    test("a flag is offered as yes or no, and an answer that is neither is asked again") {
+      val lines = answers()
+      for {
+        _ <- TestConsole.feedLines(
+          (lines.take(NationalityExclude) ++ List("yep", "y") ++ lines.drop(NationalityExclude + 1) :+ "y")*
+        )
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+      } yield assertTrue(
+        out.contains("nationalityExclude [no] (y/n, Enter=keep):   enter y or n\nnationalityExclude [no]"),
+        posts.map(_.criteria.nationalityExclude) == List(true)
       )
     },
     test("set with no changes sends nothing") {

@@ -46,7 +46,7 @@ object ServerStop {
     */
   def stopQuestion(port: Int, pid: Long, databaseOption: Option[String]): Option[String] =
     Option.when(!databaseOption.flatMap(DatabaseAddress.fromRendered).exists(_.isLoopback)) {
-      s"Stop ${describeServer(port, pid, databaseOption)}? [y/N] "
+      s"Stop ${describeServer(port, pid, databaseOption)}?"
     }
 
   private def describeServer(port: Int, pid: Long, databaseOption: Option[String]): String =

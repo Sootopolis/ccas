@@ -4,6 +4,7 @@ import zio.{Console, Task, ZIO}
 
 import ccas.analysis.tables.RecruitmentCriteria
 import ccas.api.misc.subtypes.{ClubId, Elo}
+import ccas.utils.YesNo
 
 /** Asks for each recruitment criteria setting in turn, offering the current value, for
   * `ccas recruitment-criteria set`.
@@ -101,15 +102,17 @@ private[cli] object CriteriaPrompts {
         }
     )
 
-  private def promptBool(label: String, current: Boolean): Task[Boolean] =
-    prompt(s"$label [$current] (y/n, Enter=keep): ").flatMap { s =>
-      s.toLowerCase match {
-        case ""                         => ZIO.succeed(current)
-        case "y" | "yes" | "true" | "t" => ZIO.succeed(true)
-        case "n" | "no" | "false" | "f" => ZIO.succeed(false)
-        case _                          => Console.printLine("  enter y or n") *> promptBool(label, current)
+  // Shown as yes or no, as the recap shows a flag, since that is what it is answered with.
+  private def promptBool(label: String, current: Boolean): Task[Boolean] = {
+    val shown = if (current) { "yes" }
+    else { "no" }
+    prompt(s"$label [$shown] (y/n, Enter=keep): ").flatMap { typed =>
+      YesNo.read(typed, default = current) match {
+        case Some(answer) => ZIO.succeed(answer)
+        case None         => Console.printLine(YesNo.AskAgain) *> promptBool(label, current)
       }
     }
+  }
 
   private def promptStrList(label: String, current: List[String]): Task[List[String]] =
     prompt(s"$label [${current.mkString(",")}] (comma-separated, Enter=keep, - =empty): ").map {

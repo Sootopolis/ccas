@@ -3,9 +3,21 @@ package ccas.analysis.apps.recruitment
 import java.sql.SQLException
 import java.time.{Duration as JDuration, Instant}
 
-import scala.io.StdIn
-
-import zio.{durationLong, Clock, ExitCode, Ref, RIO, Scope, Task, UIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{
+  durationLong,
+  Clock,
+  Console,
+  ExitCode,
+  Ref,
+  RIO,
+  Scope,
+  Task,
+  UIO,
+  ZEnvironment,
+  ZIO,
+  ZIOAppArgs,
+  ZIOAppDefault
+}
 
 import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub}
 import ccas.analysis.apps.membership.MembershipApp
@@ -15,7 +27,7 @@ import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.club.{ApiClubMatches, ApiClubMembers}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
 import ccas.api.player.ApiPlayer
-import ccas.utils.{display, OutputFile, ProgressDisplay}
+import ccas.utils.{display, OutputFile, ProgressDisplay, YesNo}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.{BadRequestException, ConflictException, NotFoundException}
 import ccas.utils.sql.PostgresClient
@@ -490,14 +502,13 @@ object RecruitmentApp extends ZIOAppDefault {
 
   private def promptConfirmation(found: List[FoundCandidate]): Task[List[FoundCandidate]] =
     for {
-      _ <- ZIO.logInfo(s"\nFound ${found.size} candidates:")
-      _ <- ZIO.foreachDiscard(found)(c => ZIO.logInfo(s"  ${c.username}"))
-      answer <- ZIO.attemptBlocking {
-        StdIn.readLine(s"\nMark all ${found.size} candidates as Invited? [Y/n] ")
-      }.orElse(ZIO.succeed("n"))
+      _    <- ZIO.logInfo(s"\nFound ${found.size} candidates:")
+      _    <- ZIO.foreachDiscard(found)(c => ZIO.logInfo(s"  ${c.username}"))
+      _    <- Console.printLine("")
+      mark <- YesNo.ask(s"Mark all ${found.size} candidates as Invited?", default = true)
     } yield
-      if (answer == null || answer.trim.isEmpty || answer.trim.toLowerCase.startsWith("y")) found
-      else Nil
+      if (mark) { found }
+      else { Nil }
 
   // --- Report mode ---
 

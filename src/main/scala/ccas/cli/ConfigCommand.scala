@@ -1,11 +1,11 @@
 package ccas.cli
 
-import java.io.EOFException
 import java.nio.file.{Files, Path}
 
 import zio.{Console, ExitCode, Task, UIO, ZIO}
 
 import ccas.server.config.{ServerEnvFile, ServerEnvKeys}
+import ccas.utils.YesNo
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 
@@ -134,10 +134,10 @@ object ConfigCommand {
       dbPairs    <- promptDatabase
       portOption <- promptOptional("Server port [8080] (Enter to keep the default): ")
       pairs = ("CCAS_CONTACT_EMAIL" -> email) :: dbPairs ::: portOption.map("SERVER_PORT" -> _).toList
-      _       <- preview(pairs)
-      confirm <- promptConfirm(s"Save to $file? [Y/n]: ")
+      _      <- preview(pairs)
+      saving <- confirm(s"Save to $file?", default = true)
       code <-
-        if (confirm) { save(file, pairs) }
+        if (saving) { save(file, pairs) }
         else { Console.printLine("aborted").as(ExitCode.success) }
     } yield code
 
@@ -173,16 +173,13 @@ object ConfigCommand {
     Console.printLine("\nWill write:") *>
       ZIO.foreachDiscard(pairs) { case (k, v) => Console.printLine(s"  $k=${ServerEnvKeys.redact(k, v)}") }
 
-  // --- prompt primitives (CliPrompt's, but for what `init` takes as yes and its message when input ends) ---
+  // --- prompt primitives ---
 
-  // On EOF (e.g. `ccas config init </dev/null`) `Console.readLine` fails with EOFException; surface a clear reason
-  // instead of a bare "error: null" from the generic handler. `init` is the only caller, and it is interactive-only.
+  private val NeedsTerminal = "'ccas config init' requires an interactive terminal"
+
+  // `init` is interactive-only, so input that ends (`ccas config init </dev/null`), at any question, says so.
   private def prompt(label: String): Task[String] =
-    (Console.print(label) *> Console.readLine)
-      .map(_.trim)
-      .catchSome { case _: EOFException =>
-        ZIO.fail(new RuntimeException("'ccas config init' requires an interactive terminal"))
-      }
+    CliPrompt.line(label, ended = NeedsTerminal)
 
   private def promptRequired(label: String): Task[String] =
     prompt(label).flatMap { s =>
@@ -199,13 +196,11 @@ object ConfigCommand {
       else { default }
     }
 
-  private def promptConfirm(label: String): Task[Boolean] =
-    prompt(label).map(_.toLowerCase).map(s => s.isEmpty || s == "y" || s == "yes")
-
   private def confirmOverwrite(file: Path): Task[Boolean] =
-    prompt(s"$file already exists — update it with these values? [y/N]: ").map(_.toLowerCase).map { s =>
-      s == "y" || s == "yes"
-    }
+    confirm(s"$file already exists — update it with these values?", default = false)
+
+  private def confirm(question: String, default: Boolean): Task[Boolean] =
+    YesNo.askOr(question, default, ZIO.fail(CliError(NeedsTerminal, 1)))
 
   // --- shared ---
 
