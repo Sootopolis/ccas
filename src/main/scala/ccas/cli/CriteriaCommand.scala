@@ -6,14 +6,15 @@ import java.time.Instant
 
 import scala.util.Try
 
-import zio.{Console, IO, Task, ZIO}
+import zio.{Console, IO, Ref, Task, UIO, ZIO}
 import zio.json.EncoderOps
 
-import ccas.analysis.apps.{ClubQuery, NamedClub}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.analysis.apps.recruitment.{CriteriaRecap, CriteriaSpec, RecruitmentCriteriaApp}
 import ccas.analysis.tables.{RecruitmentAlias, RecruitmentCriteria}
-import ccas.api.misc.subtypes.ClubSlug
-import ccas.server.routes.{ClubRequest, ClubResult}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.server.routes.{ClubRequest, ClubResult, ClubRoutes}
+import ccas.server.routes.ClubRoutes.ClubInfo
 import ccas.server.routes.RecruitmentCriteriaRoutes.{
   AliasSummary,
   CriteriaView,
@@ -21,6 +22,7 @@ import ccas.server.routes.RecruitmentCriteriaRoutes.{
   SetCriteriaResponse
 }
 import ccas.utils.YesNo
+import ccas.utils.errors.safeMessage
 
 /** `ccas recruitment-criteria show | set | list`: a club's named criteria, through the server's criteria routes. Each
   * settles its club as every club command does; `set` then names it by id.
@@ -102,12 +104,85 @@ private[cli] object CriteriaCommand {
         clubAnswer(api.getJson[ClubResult[CriteriaView]](viewPath(name, ClubQuery.ById(club.clubId))))
           .map(_.criteria.toCriteria)
       }
+      clubs <- clubNames(wiring, api)
       candidate <- fileCriteria match {
         case Some(criteria) => ZIO.succeed(criteria)
-        case None => CriteriaPrompts.criteria(heading(club.slug, name, existing.isDefined), existingOr(existing))
+        case None => CriteriaPrompts.criteria(heading(club.slug, name, existing.isDefined), existingOr(existing), clubs)
       }
-      code <- saveChanges(api, club, name, existing, candidate, confirm = interactive)
+      code <- saveChanges(api, club, name, existing, candidate, clubs, confirm = interactive)
     } yield code
+
+  // Through the route `ccas club show` asks, so a slug reaches here the club it reaches there. A club that can't be
+  // named, or the server's failure to say, shows as `#<id>`. Each name is asked for once, and kept for the preview. A
+  // name that reached another club is noted as every club command notes it.
+  private def clubNames(wiring: CliWiring, api: CcasApiClient): UIO[CriteriaPrompts.ClubNames] =
+    Ref.make(Map.empty[ClubId, String]).map { known =>
+      def resolved(query: ClubQuery): Task[ClubResolution] =
+        api.getJson[ClubResult[ClubInfo]](ClubRoutes.resolvePath(query)).map(_.resolution)
+      def remember(id: ClubId, name: String): UIO[String] = known.update(_.updated(id, name)).as(name)
+      CriteriaPrompts.ClubNames(
+        name = id =>
+          known.get.map(_.get(id)).someOrElseZIO {
+            resolved(ClubQuery.ById(id)).map(nameOf(_, id)).orElseSucceed(idText(id)).flatMap(remember(id, _))
+          },
+        find = slug =>
+          resolved(ClubQuery.BySlug(slug))
+            .flatMap { resolution =>
+              excludable(resolution) match {
+                case Left(problem) => ZIO.left(withIdHint(slug, problem))
+                case Right(id) =>
+                  remember(id, nameOf(resolution, id)).as(
+                    Right(CriteriaPrompts.Reached(id, Dispatcher.nameChangeNote(resolution)))
+                  )
+              }
+            }
+            .catchAll(e => ZIO.left(s"couldn't look ${ClubSlug.unwrap(slug)} up: ${e.safeMessage}")),
+        note = Dispatcher.noteNameChanges(wiring, _)
+      )
+    }
+
+  // Digits the server knows as no club's name may have been meant as an id, which the prompt takes with its `#`.
+  private def withIdHint(slug: ClubSlug, problem: String): String = {
+    val typed = ClubSlug.unwrap(slug)
+    if (typed.forall(_.isDigit)) { s"$problem (for club id $typed, type #$typed)" }
+    else { problem }
+  }
+
+  private def nameOf(resolution: ClubResolution, id: ClubId): String =
+    resolution.runnable.fold(_ => idText(id), club => ClubSlug.unwrap(club.slug))
+
+  private def idText(clubId: ClubId): String = s"#${ClubId.unwrap(clubId)}"
+
+  /** How the change preview names each excluded club, so the operator sees which club each typed name reached before
+    * saving: as the prompt named them, asking only for those it did not.
+    */
+  private def excludedNames(
+    clubs: CriteriaPrompts.ClubNames,
+    existing: Option[RecruitmentCriteria],
+    candidate: RecruitmentCriteria
+  ): Task[ClubId => String] = {
+    val before = existing.getOrElse(RecruitmentCriteria.defaultDaily).excludeClubs
+    if (before == candidate.excludeClubs) { ZIO.succeed(idText) }
+    else {
+      ZIO
+        .foreachPar((before ++ candidate.excludeClubs).distinct)(id => clubs.name(id).map(id -> _))
+        .withParallelism(CriteriaPrompts.LookupParallelism)
+        .map(named => id => named.toMap.getOrElse(id, idText(id)))
+    }
+  }
+
+  /** The club a typed name excludes. Excluding needs only the id, so a club reached by a name it has since lost
+    * counts; a name several clubs held is settled by `#<id>`, the prompt's form of `--club-id`.
+    */
+  private def excludable(resolution: ClubResolution): Either[String, ClubId] =
+    resolution match {
+      case ClubResolution.Ambiguous(requested, holders) =>
+        Left(
+          s"no club holds ${ClubSlug.unwrap(requested)} now, and it was held by " +
+            s"${holders.map(_.display).mkString(", ")}; give the one you mean as #<id>"
+        )
+      case other => other.reachedOption.map(_.clubId).toRight(other.runnable.swap.getOrElse("no club reached"))
+    }
 
   private val NeedsTerminal = "set asks for each setting, so it needs a terminal; or pass --file <criteria.json>"
 
@@ -124,24 +199,30 @@ private[cli] object CriteriaCommand {
     name: String,
     existing: Option[RecruitmentCriteria],
     candidate: RecruitmentCriteria,
+    clubs: CriteriaPrompts.ClubNames,
     confirm: Boolean
   ): Task[Int] =
     for {
       // Refused here as the server would refuse it, before the operator is asked to save what can't be saved.
-      _ <- ZIO.fromEither(candidate.capped.validate).mapError(problem => CliError(s"not saved: $problem", 1))
-      _ <- capNote(candidate)
-      _ <- changeLines(existing, candidate.capped) match {
+      _     <- ZIO.fromEither(candidate.capped.validate).mapError(problem => CliError(s"not saved: $problem", 1))
+      _     <- capNote(candidate)
+      names <- excludedNames(clubs, existing, candidate)
+      _ <- changeLines(existing, candidate.capped, names) match {
         case Nil     => Console.printLine("No changes; nothing saved.")
         case changes => saveWhatChanged(api, club, name, candidate, changes, confirm)
       }
     } yield 0
 
   // A new name has no version to compare with, so what is about to be saved is shown against the defaults instead.
-  private def changeLines(existing: Option[RecruitmentCriteria], candidate: RecruitmentCriteria): List[String] =
+  private def changeLines(
+    existing: Option[RecruitmentCriteria],
+    candidate: RecruitmentCriteria,
+    clubName: ClubId => String
+  ): List[String] =
     existing match {
-      case Some(_) => RecruitmentCriteriaApp.diffLines(existing, candidate)
+      case Some(_) => RecruitmentCriteriaApp.diffLines(existing, candidate, clubName)
       case None =>
-        RecruitmentCriteriaApp.diffLines(Some(RecruitmentCriteria.defaultDaily), candidate) match {
+        RecruitmentCriteriaApp.diffLines(Some(RecruitmentCriteria.defaultDaily), candidate, clubName) match {
           case Nil          => List("(new criteria, the same as the defaults)")
           case fromDefaults => "(new criteria; what differs from the defaults)" :: fromDefaults
         }
@@ -169,7 +250,7 @@ private[cli] object CriteriaCommand {
 
   // The server saves a lookback past the cap as the cap, which can leave nothing to save, so say so before the diff.
   private def capNote(candidate: RecruitmentCriteria): Task[Unit] =
-    ZIO.foreachDiscard(RecruitmentCriteriaApp.diffLines(Some(candidate), candidate.capped)) { capped =>
+    ZIO.foreachDiscard(RecruitmentCriteriaApp.diffLines(Some(candidate), candidate.capped, idText)) { capped =>
       Console.printLine(s"Capped to the ${RecruitmentCriteria.MaxDaysSinceLookback}-day lookback: $capped")
     }
 

@@ -5,6 +5,7 @@ import java.sql.SQLException
 import com.augustnagro.magnum.*
 import zio.ZIO
 
+import ccas.analysis.tables.RecruitmentCriteria.Check.{inPercent, inUnit, nonNeg, ordered}
 import ccas.api.misc.subtypes.{ClubId, Elo}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
@@ -44,17 +45,6 @@ final case class RecruitmentCriteria(
     * cap, inside `insert`.) Surfaced as a `BadRequestException` by callers.
     */
   def validate: Either[String, Unit] = {
-    def nonNeg(label: String, v: Option[Int]): Option[String] =
-      v.filter(_ < 0).map(x => s"$label must be >= 0 (got $x)")
-    def inUnit(label: String, v: Option[Double]): Option[String] =
-      v.filter(d => d < 0.0 || d > 1.0).map(x => s"$label must be in [0, 1] (got $x)")
-    def inPercent(label: String, v: Option[Double]): Option[String] =
-      v.filter(d => d < 0.0 || d > 100.0).map(x => s"$label must be in [0, 100] (got $x)")
-    def ordered[A](label: String, lo: Option[A], hi: Option[A])(using ord: Ordering[A]): Option[String] =
-      (lo, hi) match {
-        case (Some(l), Some(h)) if ord.gt(l, h) => Some(s"$label min ($l) must be <= max ($h)")
-        case _                                  => None
-      }
     val errors = List(
       nonNeg("minDaysSinceRegistration", minDaysSinceRegistration),
       nonNeg("daysSinceLastInvited", daysSinceLastInvited),
@@ -81,6 +71,26 @@ final case class RecruitmentCriteria(
 
 object RecruitmentCriteria {
   val MaxDaysSinceLookback: Int = 180
+
+  /** The rules [[RecruitmentCriteria.validate]] applies, each giving what is wrong with a setting, if anything. The CLI
+    * applies the same ones as each setting is answered.
+    */
+  object Check {
+    def nonNeg(label: String, v: Option[Int]): Option[String] =
+      v.filter(_ < 0).map(x => s"$label must be >= 0 (got $x)")
+
+    def inUnit(label: String, v: Option[Double]): Option[String] =
+      v.filter(d => d < 0.0 || d > 1.0).map(x => s"$label must be in [0, 1] (got $x)")
+
+    def inPercent(label: String, v: Option[Double]): Option[String] =
+      v.filter(d => d < 0.0 || d > 100.0).map(x => s"$label must be in [0, 100] (got $x)")
+
+    def ordered[A](label: String, lo: Option[A], hi: Option[A])(using ord: Ordering[A]): Option[String] =
+      (lo, hi) match {
+        case (Some(l), Some(h)) if ord.gt(l, h) => Some(s"$label min ($l) must be <= max ($h)")
+        case _                                  => None
+      }
+  }
 
   private val selectCols = SqlLiteral(
     """criteria_id,

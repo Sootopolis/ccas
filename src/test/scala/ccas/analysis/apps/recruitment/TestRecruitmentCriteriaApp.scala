@@ -109,9 +109,9 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
     test("diffLines: (new criteria) when no prior; labelled lines when changed") {
       val before      = makeCriteria(daysSinceRejected = Some(10), excludeFormerMembers = false)
       val after       = makeCriteria(daysSinceRejected = Some(20), excludeFormerMembers = true)
-      val newLines    = RecruitmentCriteriaApp.diffLines(None, after)
-      val changeLines = RecruitmentCriteriaApp.diffLines(Some(before), after)
-      val unchanged   = RecruitmentCriteriaApp.diffLines(Some(after), after)
+      val newLines    = RecruitmentCriteriaApp.diffLines(None, after, _.toString)
+      val changeLines = RecruitmentCriteriaApp.diffLines(Some(before), after, _.toString)
+      val unchanged   = RecruitmentCriteriaApp.diffLines(Some(after), after, _.toString)
       assertTrue(
         newLines == List("(new criteria)"),
         changeLines.exists(_.startsWith("daysSinceRejected: 10 → 20")),

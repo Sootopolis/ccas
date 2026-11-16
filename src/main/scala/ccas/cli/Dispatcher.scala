@@ -671,7 +671,7 @@ object Dispatcher {
 
   // A name that reached the server attached to a different club than it names now means the completion cache may still
   // be offering the old one, so drop the cache alongside the note.
-  private def noteNameChanges(wiring: CliWiring, notes: List[String]): UIO[Unit] =
+  private[cli] def noteNameChanges(wiring: CliWiring, notes: List[String]): UIO[Unit] =
     ZIO.whenDiscard(notes.nonEmpty) {
       CompletionCache.invalidate(wiring.clubsFile) *>
         ZIO.foreachDiscard(notes)(note => Console.printLineError(note).orDie)
