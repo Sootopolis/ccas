@@ -1,5 +1,7 @@
 package ccas.cli
 
+import zio.cli.Command
+
 /** Single source of truth for shell-completion generation. Mirrors the `zio-cli` [[CliCommand]] tree so one structure
   * drives the bash/zsh/fish emitters ([[CompletionEmitter]]) and the drift guard (`TestCcasCompletion`). Keep it in
   * sync with [[CliCommand]]: the drift test fails if the tree gains a command or flag that is missing here.
@@ -30,12 +32,11 @@ object CompletionSpec {
     * inherited `--server`; `valueFlags` is the subset that takes an argument; `positional` is its first positional kind.
     */
   final case class Leaf(path: List[String], flags: List[String], valueFlags: List[String], positional: PositionalKind) {
-    def name: String    = path.last
-    def summary: String = CompletionSpec.summaries.getOrElse(path, "")
+    def name: String = path.last
   }
 
   /** A grouping command (`blacklist`, `schedule`) whose own completion is just its child subcommand names. */
-  final case class Group(name: String, children: List[String], summary: String)
+  final case class Group(name: String, children: List[String])
 
   private val server = "--server"
 
@@ -48,6 +49,9 @@ object CompletionSpec {
     * nothing to offer — the ids come from the error that asked for one, not from any cache.
     */
   private val clubIdFlag = "--club-id"
+
+  /** Takes a file's path, so completion offers the filesystem as its value. */
+  val fileFlag = "--file"
 
   /** Leaves in tree order. `valueFlags` always lists `--server` first to match its position in `flags`. */
   val leaves: List[Leaf] = List(
@@ -124,8 +128,8 @@ object CompletionSpec {
     ),
     Leaf(
       path = List("recruitment-criteria", "set"),
-      flags = List(server, clubFlag, clubIdFlag, "--file"),
-      valueFlags = List(server, clubFlag, clubIdFlag, "--file"),
+      flags = List(server, clubFlag, clubIdFlag, fileFlag),
+      valueFlags = List(server, clubFlag, clubIdFlag, fileFlag),
       positional = Other
     ),
     Leaf(
@@ -179,24 +183,12 @@ object CompletionSpec {
   )
 
   val groups: List[Group] = List(
-    Group("server", List("up", "down", "status", "list"), "Run and manage the ccas backend HTTP server"),
-    Group(
-      name = "recruitment-criteria",
-      children = List("show", "set", "list"),
-      summary = "Show, set and list the named criteria a club's recruit runs judge players by"
-    ),
-    Group("blacklist", List("add", "list", "remove"), "Manage a club's recruitment blacklist"),
-    Group("schedule", List("list", "add", "remove"), "Manage scheduled jobs"),
-    Group(
-      name = "club",
-      children = List("add", "remove", "list", "show"),
-      summary = "Manage the set of clubs you run CCAS for (pick the one commands target with 'ccas use-club')"
-    ),
-    Group(
-      name = "config",
-      children = List("get", "set", "unset", "list", "show", "path", "init"),
-      summary = "Manage the local server-bootstrap config file (ccas.env)"
-    )
+    Group("server", List("up", "down", "status", "list")),
+    Group("recruitment-criteria", List("show", "set", "list")),
+    Group("blacklist", List("add", "list", "remove")),
+    Group("schedule", List("list", "add", "remove")),
+    Group("club", List("add", "remove", "list", "show")),
+    Group("config", List("get", "set", "unset", "list", "show", "path", "init"))
   )
 
   /** Top-level subcommand names, in tree order (matches `CliCommand.command(...).subcommands`). */
@@ -238,43 +230,22 @@ object CompletionSpec {
   /** Every long flag used anywhere — for the drift guard (`treeFlags ⊆ this`). */
   val allFlags: Set[String] = (globalFlags ++ leaves.flatMap(_.flags)).toSet
 
-  // One row per command: scalafmt would wrap the longest rows, which run past 120 columns.
-  // format: off
-  /** One-line help per command path, mirroring the `withHelp(...)` strings in [[CliCommand]]; used as fish `-d` text. */
-  private[cli] val summaries: Map[List[String], String] = Map(
-    List("server", "up")        -> "Run the ccas backend HTTP server (foreground by default; --detach/-d to background it)",
-    List("server", "down")      -> "Stop a detached ccas server (reads the pid file and sends SIGTERM)",
-    List("server", "status")    -> "Report whether the local ccas server is running and ready",
-    List("server", "list")      -> "List the detached ccas servers on this machine, and a foreground one on this shell's port",
-    List("use-club")            -> "Show, set, or clear the current club used by commands that omit --club",
-    List("membership")          -> "Submit a membership-sync job (current club, --club a,b, or --all managed clubs)",
-    List("history")             -> "Submit a match-history crawl job (current club, --club a,b, or --all managed clubs)",
-    List("recruit")             -> "Submit a recruitment scouting job for a club",
-    List("stats")               -> "Submit a club performance-stats job",
-    List("jobs")                -> "List recent jobs and their status",
-    List("logs")                -> "Poll a job's status and logs until it finishes",
-    List("cancel")              -> "Request cancellation of a running job (the job stops as soon as it reaches an interruptible point)",
-    List("completion")          -> "Emit a shell completion script (bash, zsh, or fish)",
-    List("club", "add")         -> "Mark a club as one you manage with CCAS",
-    List("club", "remove")      -> "Remove a club from the ones you manage",
-    List("club", "list")        -> "List the clubs you manage with CCAS",
-    List("club", "show")        -> "Show which club a name or id reaches, without acting on it",
-    List("recruitment-criteria", "show") -> "Show a club's recruitment criteria, one setting per line",
-    List("recruitment-criteria", "set")  -> "Set a club's recruitment criteria, asking for each setting; a save makes a new version",
-    List("recruitment-criteria", "list") -> "List a club's named recruitment criteria, each with its version",
-    List("blacklist", "add")    -> "Blacklist one or more usernames for a club",
-    List("blacklist", "list")   -> "List a club's blacklist entries",
-    List("blacklist", "remove") -> "Remove a username from a club's blacklist",
-    List("schedule", "list")    -> "List scheduled jobs",
-    List("schedule", "add")     -> "Create a scheduled job",
-    List("schedule", "remove")  -> "Delete a scheduled job by id",
-    List("config", "get")       -> "Print one value from the server config file (ccas.env)",
-    List("config", "set")       -> "Set a value in the server config file (written 0600)",
-    List("config", "unset")     -> "Remove a value from the server config file",
-    List("config", "list")      -> "List known settings and current values (secrets redacted)",
-    List("config", "show")      -> "Alias for 'config list'",
-    List("config", "path")      -> "Print the server config file path",
-    List("config", "init")      -> "Interactive wizard to create the server config file (ccas.env)"
-  )
-  // format: on
+  /** A command's one-line help, by its path below `ccas`, as [[CliCommand]] gives it; empty for a path it lacks. */
+  def summary(path: List[String]): String = helpByPath.getOrElse(path, "")
+
+  /** Every command's help, read from the [[CliCommand]] tree rather than copied, so the two can't drift (#492). */
+  private[cli] val helpByPath: Map[List[String], String] = {
+    def walk(command: Command[?], prefix: List[String]): List[(List[String], String)] = command match {
+      case Command.Map(inner, _)       => walk(inner, prefix)
+      case Command.OrElse(left, right) => walk(left, prefix) ++ walk(right, prefix)
+      case Command.Subcommands(parent, child) =>
+        val own = walk(parent, prefix)
+        own ++ own.flatMap { case (path, _) => walk(child, path) }
+      case single: Command.Single[?, ?] => List((prefix :+ single.name) -> single.shortDesc)
+    }
+    // The root is `ccas` itself, whose own help no completion shows.
+    walk(CliCommand.command(CliCommand.DefaultServer), Nil).collect {
+      case (_ :: path, help) if path.nonEmpty => path -> help
+    }.toMap
+  }
 }
