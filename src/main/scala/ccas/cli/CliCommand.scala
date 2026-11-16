@@ -84,6 +84,22 @@ object CliCommand {
     runId: Option[Int],
     noProgress: Boolean
   ) extends ServerCommand
+  final case class CriteriaList(server: String, club: Option[String], clubIdOption: Option[Long]) extends ServerCommand
+  // `names` holds every positional, so `CriteriaCommand` can refuse a second name rather than silently drop it.
+  final case class CriteriaShow(
+    server: String,
+    club: Option[String],
+    clubIdOption: Option[Long],
+    json: Boolean,
+    names: List[String]
+  ) extends ServerCommand
+  final case class CriteriaSet(
+    server: String,
+    club: Option[String],
+    clubIdOption: Option[Long],
+    fileOption: Option[String],
+    names: List[String]
+  ) extends ServerCommand
   final case class Stats(
     server: String,
     club: Option[String],
@@ -395,6 +411,42 @@ object CliCommand {
           )
       }
 
+  private val criteriaNameArgs: Args[List[String]] =
+    (Args.text("name") ??
+      s"Which of the club's named criteria (default: \"${RecruitmentAlias.Default}\")").repeat
+
+  private def criteriaShow(default: String): Command[CliCommand] =
+    Command(
+      name = "show",
+      options = serverOpt(default) ++ clubOpt ++ clubIdOpt ++
+        (Options.boolean("json") ?? "Print the criteria as JSON, a file 'recruitment-criteria set --file' reads"),
+      args = criteriaNameArgs
+    ).withHelp("Show a club's recruitment criteria, one setting per line")
+      .map { case ((server, club, clubIdOption, json), names) =>
+        CriteriaShow(server, club, clubIdOption, json, names)
+      }
+
+  private def criteriaSet(default: String): Command[CliCommand] =
+    Command(
+      name = "set",
+      options = serverOpt(default) ++ clubOpt ++ clubIdOpt ++
+        (Options.text("file").optional ?? "Read the criteria from a JSON file, as 'show --json' prints, not prompts"),
+      args = criteriaNameArgs
+    ).withHelp("Set a club's recruitment criteria, asking for each setting; a save makes a new version")
+      .map { case ((server, club, clubIdOption, fileOption), names) =>
+        CriteriaSet(server, club, clubIdOption, fileOption, names)
+      }
+
+  private def criteriaList(default: String): Command[CliCommand] =
+    Command("list", serverOpt(default) ++ clubOpt ++ clubIdOpt)
+      .withHelp("List a club's named recruitment criteria, each with its version")
+      .map { case (server, club, clubIdOption) => CriteriaList(server, club, clubIdOption) }
+
+  private def recruitmentCriteria(default: String): Command[CliCommand] =
+    Command("recruitment-criteria")
+      .withHelp("Show, set and list the named criteria a club's recruit runs judge players by")
+      .subcommands(criteriaShow(default), criteriaSet(default), criteriaList(default))
+
   private def stats(default: String): Command[CliCommand] =
     Command(
       name = "stats",
@@ -612,6 +664,7 @@ object CliCommand {
       membership(defaultServer),
       history(defaultServer),
       recruit(defaultServer),
+      recruitmentCriteria(defaultServer),
       stats(defaultServer),
       jobs(defaultServer),
       logs(defaultServer),

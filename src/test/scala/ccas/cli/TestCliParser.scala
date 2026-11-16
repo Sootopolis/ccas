@@ -280,6 +280,24 @@ object TestCliParser extends ZIOSpecDefault {
         )
       }
     },
+    test("recruitment-criteria show takes an optional criteria name, defaulting to \"default\"") {
+      for {
+        bare    <- parsed("recruitment-criteria", "show")
+        named   <- parsed("recruitment-criteria", "show", "--json", "weekend")
+        unnamed <- CriteriaCommand.criteriaName(Nil)
+      } yield assertTrue(
+        bare.contains(CliCommand.CriteriaShow(DefaultServer, None, None, json = false, names = Nil)),
+        named.contains(CliCommand.CriteriaShow(DefaultServer, None, None, json = true, names = List("weekend"))),
+        unnamed == "default"
+      )
+    },
+    test("recruitment-criteria set takes --file and a criteria name") {
+      parsed("recruitment-criteria", "set", "--club", "team-alpha", "--file", "c.json", "weekend").map { c =>
+        assertTrue(
+          c.contains(CliCommand.CriteriaSet(DefaultServer, Some("team-alpha"), None, Some("c.json"), List("weekend")))
+        )
+      }
+    },
     test("schedule add parses kind and interval") {
       parsed("schedule", "add", "--kind", "Recruitment", "--interval-hours", "24", "--club", "team-alpha").map { c =>
         assertTrue(

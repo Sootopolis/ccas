@@ -1,6 +1,6 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.ZoneOffset
+import java.time.{Instant, ZoneOffset}
 import java.time.format.DateTimeFormatter
 
 import zio.{RIO, ZIO}
@@ -59,13 +59,14 @@ object CriteriaRecap {
   /** Names the criteria as the operator does: by club and name, dated by the version, never by the criteria id. */
   private[recruitment] def header(aliases: List[RecruitmentAlias], clubSlugs: Map[ClubId, ClubSlug]): String =
     aliases.map { row =>
-      // To the minute, so two versions set on one day read apart.
-      val version = row.since.atOffset(ZoneOffset.UTC).format(VersionFormat)
-      s"${slugOf(row.clubId, clubSlugs)}'s criteria \"${row.alias}\", version of $version"
+      s"${slugOf(row.clubId, clubSlugs)}'s criteria \"${row.alias}\", version of ${version(row.since)}"
     } match {
       case Nil   => "Criteria"
       case named => named.mkString("; ")
     }
+
+  /** A version of criteria as the operator reads it: when it was set, to the minute, so two set on one day read apart. */
+  def version(since: Instant): String = since.atOffset(ZoneOffset.UTC).format(VersionFormat)
 
   private val VersionFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'")
 

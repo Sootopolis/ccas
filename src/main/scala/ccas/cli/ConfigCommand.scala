@@ -173,7 +173,7 @@ object ConfigCommand {
     Console.printLine("\nWill write:") *>
       ZIO.foreachDiscard(pairs) { case (k, v) => Console.printLine(s"  $k=${ServerEnvKeys.redact(k, v)}") }
 
-  // --- prompt primitives (mirror RecruitmentCriteriaApp) ---
+  // --- prompt primitives (CliPrompt's, but for what `init` takes as yes and its message when input ends) ---
 
   // On EOF (e.g. `ccas config init </dev/null`) `Console.readLine` fails with EOFException; surface a clear reason
   // instead of a bare "error: null" from the generic handler. `init` is the only caller, and it is interactive-only.
