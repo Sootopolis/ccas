@@ -35,8 +35,8 @@ object TestDispatcherResolution extends ZIOSpecDefault {
   private def acted(resolution: ClubResolution)      = Dispatcher.ClubOutcome(resolution = resolution, acted = true)
   private def didNothing(resolution: ClubResolution) = Dispatcher.ClubOutcome(resolution = resolution, acted = false)
 
-  private def answering(input: String) =
-    TestConsole.feedLines(input) *> Dispatcher.promptForClub(contested, interactive = true)
+  private def answering(input: String*) =
+    TestConsole.feedLines(input*) *> Dispatcher.promptForClub(contested, interactive = true)
 
   /** `club show` against a server that answers `resolution` only when asked `asked`: how it ended, and what it printed
     * to stdout and stderr.
@@ -308,13 +308,30 @@ object TestDispatcherResolution extends ZIOSpecDefault {
     test("the prompt answers with the club at the number picked") {
       answering("2").map(picked => assertTrue(picked.contains(ClubId(2))))
     },
-    test("a blank, out-of-range or non-numeric answer aborts rather than guessing at a club") {
+    test("a blank answer aborts rather than guessing at a club") {
       for {
-        blank      <- answering("")
-        outOfRange <- answering("3")
-        zero       <- answering("0")
-        text       <- answering("other-name")
-      } yield assertTrue(blank.isEmpty, outOfRange.isEmpty, zero.isEmpty, text.isEmpty)
+        picked <- answering("", "1")
+        said   <- TestConsole.outputErr
+      } yield assertTrue(picked.isEmpty, said.lastOption.exists(_.contains("aborted")))
+    },
+    test("input that ends before an answer aborts") {
+      for {
+        picked <- answering()
+        said   <- TestConsole.outputErr
+      } yield assertTrue(picked.isEmpty, said.lastOption.exists(_.contains("aborted")))
+    },
+    test("an out-of-range or non-numeric answer is asked again, not taken as an abort") {
+      for {
+        picked <- answering("l", "3", "0", "other-name", "1")
+        said   <- TestConsole.outputErr
+      } yield assertTrue(
+        picked.contains(ClubId(1)),
+        said.count(_.contains("enter a number from 1 to 2")) == 4,
+        !said.exists(_.contains("aborted"))
+      )
+    },
+    test("a typo before a blank answer still aborts") {
+      answering("x", "", "1").map(picked => assertTrue(picked.isEmpty))
     },
     // A candidate holding no name resolves `Nameless` by id, so offering it would offer a command that fails.
     test("a candidate holding no name is not offered, and the numbering skips it") {
