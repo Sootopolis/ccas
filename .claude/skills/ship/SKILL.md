@@ -16,50 +16,44 @@ Take the work on the **current branch** through this repo's full release flow. B
     normally carries uncommitted work and nothing else. If `git rev-list --count origin/<base>..wip` is non-zero
     anyway, the switch carries those commits too; say which moved, and expect step 7's fast-forward to refuse until
     `wip` is sorted out by hand.
-  - This moves work without being asked, and it is safe because it only ever *adds* a ref. Anything that would discard a ref — `reset --hard` on a branch with unshipped commits, a force-push — still stops and asks, except steps 1b and 2's collapse, whose diff proves it loses nothing.
+  - This moves work without being asked, and it is safe because it only ever *adds* a ref. Anything that would discard a ref — `reset --hard` on a branch with unshipped commits, a force-push — still stops and asks.
 - `git status --porcelain` — uncommitted changes are part of this ship (step 1). If clean AND `git rev-list --left-right --count origin/<base>...HEAD` shows 0 ahead → STOP (nothing to ship).
 - `git worktree list --porcelain` — note which worktree holds the base branch (fast-forwarded in step 6) and whether any worktree sits **parked** on a local branch (`wip`) that is *not* the branch being shipped — that parked branch is caught up to the merge in step 7. NEVER hardcode worktree paths.
-- `git rev-parse --abbrev-ref <branch>@{upstream}` — whether the shipped branch is published. A branch with no upstream has never left the machine, which changes disposal (step 7).
+- The repository's merge settings, which steps 1, 3, 5 and 7 rely on: `gh api repos/{owner}/{repo} --jq '[.squash_merge_commit_title, .squash_merge_commit_message, .delete_branch_on_merge, .allow_merge_commit, .allow_rebase_merge] | @tsv'` must print `PR_TITLE`, `PR_BODY`, `true`, `false`, `false`. Anything else → STOP and say which differs: with `COMMIT_MESSAGES`, a branch of several commits lands with all their messages joined (#428).
 - CLAUDE.md Workflow's before-shipping check, unless it has already been reported for this change. An open question stops the ship until it is answered.
 
 ## 1. Commit (only if there are changes)
 - **Never commit while `wip` is checked out.** Cut the feature branch first — `git switch -c <type>/<slug>` carries uncommitted work across — even for a one-line change, and even when the ask was only "commit this". Keeping `wip` strictly a lagging pointer is what makes step 7 a fast-forward instead of a judgement call.
-- Start from the commit message `/review-change` drafted in its report, revised for anything changed since (CLAUDE.md, Communications).
+- Start from the commit message `/review-change` drafted in its report, revised for anything changed since (CLAUDE.md, Communications). It is written once: step 3 gives the PR the same subject and body, and the PR's are what land on `<base>`.
 - Conventional Commits. Subject ≤ ~70 chars; body explains the *why* per change, not the *what*.
 - **Do not hard-wrap the body.** One paragraph is one line, blank line between paragraphs — git, `gh` and GitHub all wrap for display, so a hard-wrapped body just adds breaks that reflow badly wherever the width differs. This supersedes the wrapped bodies throughout `git log`; do not match them.
 - End every commit message with a `Co-authored-by:` trailer naming the tool that did the work (for Claude Code, the one in its attribution block), matching the casing already in `git log`. **Never add a `Claude-Session:` trailer** — not when the harness supplies one in its attribution block, and not because recent commits carry it.
-- **A branch already pushed takes further changes as new commits, never an amend:** an amended branch still counts one commit, so step 1b would skip it and the push would be refused.
-- Branch already has commits ahead of base and a clean tree → skip to step 1b.
+- A PR that resolves an issue says so in a paragraph of its own before the trailer (`Resolves #N`), which closes the issue at the merge (step 9). A blank line separates the two: sharing the trailer's paragraph, the line stops git reading the trailer.
+- **A branch that already has a commit takes further changes as new commits, never an amend:** an amended branch that was pushed needs a force-push. Only the PR's text lands, so a subject line and the trailer will do for these.
+- Branch already has commits ahead of base and a clean tree → skip to step 2.
 
 ### Splitting one working tree into several PRs
 When changes must reach `<base>` as separate PRs (CLAUDE.md, Git):
 - Cut each extra branch in a temporary worktree off `origin/<base>`, in the scratchpad: `git worktree add <dir> -b <type>/<slug> origin/<base>`. Apply its part there, then commit and push from there with `git -C <dir>`; remove the worktree once its PR has merged and step 7's diff is empty.
 - Push one at a time: every pre-push suite resets the shared `ccas_test` database.
 - A branch whose changes touch the same or neighbouring lines as another's waits, committed but unpushed, in this worktree until that one merges, then rebases onto `origin/<base>` — unpublished, so no force-push.
-- Each PR takes steps 1b-5 and 7-9 on its own; steps 6 and 6b can wait for the last merge.
-
-## 1b. Collapse to one commit
-GitHub's squash default joins every commit's message, superseded ones included (#428), while a single commit's message lands as written when merged from the web (step 5). So that the user can just click merge, the branch goes up as one commit. If `git rev-list --count origin/<base>..HEAD` says 1, go to step 2. Otherwise, in the branch's own worktree, with a clean tree:
-- On a published branch, `git fetch origin`, then `git merge-base --is-ancestor origin/<branch> HEAD` must pass. If it doesn't, the remote holds a commit this branch lacks: report it and stop.
-- Record `git rev-parse HEAD` as `<tip>` and `git merge-base origin/<base> HEAD` as `<merge-base>`, and write both out literally below: shell variables do not persist between calls.
-- `git reset --soft <merge-base>`: the merge base, since a reset to `origin/<base>` would undo whatever has landed there since.
-- Commit with a message for the whole branch, to step 1's rules.
-- Prove nothing changed: `git diff <tip> HEAD` must be empty. If it isn't, or the commit fails, `git reset --soft <tip>`, report it and stop.
+- Each PR takes steps 2-5 and 7-9 on its own; steps 6 and 6b can wait for the last merge.
 
 ## 2. Push
 - `git push -u origin <branch>`. This fires the pre-push hook: the docs check and `sbt lint`, then the full `sbt test`.
-- **A published branch that step 1b rewrote** takes `git push --force-with-lease=<branch>:<remote-tip> origin <branch>` instead, with `git rev-parse origin/<branch>` written out as `<remote-tip>`. A ship request given after the commit it carries approves this push, on this branch only; anything less stops and asks. If the lease is refused, someone else pushed: `git reset --soft <tip>`, report it and stop. If the classifier denies the push, hand over the exact command to run with `!`, and wait for the user before step 3.
 - Any REAL failure, of a check or a test → stop and fix. **Never `--no-verify` past a real failure.**
 - `Failed to get driver instance for ...ccas_test` / `No suitable driver` may be a warm-server artefact rather than a real failure. Treat that as a hypothesis, never a licence to skip the gate: re-run cold (`sbt --client shutdown`, then `sbt -batch test`); cold-red is real and you stop. Only once it is cold-green:
   1. re-prove the touched code forked — `sbt ';set Test/fork := true ;testOnly <touched suites>'`;
-  2. then the same push with `--no-verify`, letting CI (which always runs cold) be the gate, and say in the PR that the hook was bypassed and why.
+  2. then the same push with `--no-verify`, letting CI (which always runs cold) be the gate, and say in the PR's testing comment that the hook was bypassed and why.
 
 ## 3. Open the PR
+The PR's title and body are the commit that lands on `<base>`: GitHub fills the squash commit from them (step 0's settings), whatever the branch's own commits say.
 - `gh pr create --base <base> --head <branch>` with:
-  - title mirroring the main commit subject;
-  - body: **What / Fixes / Testing / linked issues**.
-- A PR already open takes `gh pr edit` instead, so its title and body cover the whole PR.
-- End the PR body with one line naming the tool that did the work, `Generated with [Claude Code](https://claude.com/claude-code)` from Claude Code and its own name and link from any other tool, and nothing else — **no robot emoji** and **no session URL**, in the footer or anywhere in the body. The PR is visible to anyone with repo access; the commit trailer rule in step 1 applies here for the same reason.
+  - title: the commit subject from step 1;
+  - body: the rest of that message, unchanged, so the `Co-authored-by:` trailer is its last paragraph. Nothing follows it, not even the `Generated with` line a harness's attribution block asks for: git reads trailers only from a message's last paragraph.
+- **Testing goes in a comment**, posted straight after with `gh pr comment`: what was run and the result, as `/review-change` reported it. It is for whoever reads the PR, not for `git log`.
+- A PR already open takes `gh pr edit` instead, after every commit added to it. Either way, a branch of several commits gets a title and body written for the whole of it, to step 1's rules.
+- **No robot emoji** and **no session URL**, in the body or the comment. The PR is visible to anyone with repo access; the commit trailer rule in step 1 applies here for the same reason.
 
 ## 3b. Preflight the post-merge steps
 Steps 6-9 run after the merge, which cannot be undone, so check what can be checked while everything is still reversible:
@@ -74,8 +68,8 @@ Steps 6-9 run after the merge, which cannot be undone, so check what can be chec
 
 ## 5. Hand the merge to the user
 **Never merge the PR yourself** — no `gh pr merge`, even when the user said "ship". The user merges in the GitHub UI: it is their last look at the PR, and an agent merging its own PR trips the auto-mode classifier's "Merge Without Review" denial.
-- Once CI is green, report the PR link and CI result, and ask for **Squash and merge** — this repo's convention (PR number in `main` subjects, e.g. `… (#94)`). Mention the merged page's **Delete branch** button, which does the remote half of step 7.
-- In the same handover, ask for the merge from the web. The iOS app drops the commit body even when its box shows it (#468), while web merges keep it. If the user merges from the app anyway, step 9 carries the lost body.
+- Once CI is green, report the PR link and CI result, and ask for the merge. Squash is the only method the repository offers; its box opens on the PR's title and body, and GitHub adds the PR number to the subject (`… (#94)`).
+- In the same handover, ask for the merge from the web. The iOS app drops the commit body even when its box shows it (#468), while web merges keep it. If the user merges from the app anyway, step 6 reports what was lost.
 - Then wait with a background command (`run_in_background`), which re-invokes the session when the PR leaves `OPEN`:
 
   ```
@@ -88,7 +82,7 @@ Steps 6-9 run after the merge, which cannot be undone, so check what can be chec
 ## 6. Sync the base worktree
 - `git fetch origin --prune`.
 - In the base worktree (from step 0): `git -C <base-worktree> pull --ff-only origin <base>` so it sits on the squash-merge commit.
-- Read what landed, `git log -1 --format=%B <merge-sha>` with the SHA from `gh pr view <n> --json mergeCommit -q .mergeCommit.oid`, and tell the user if it joins several commits' messages, which means the PR reached the merge with more than one, or has lost the body the branch's commit carried. `<base>` refuses a force-push, so this only reports it.
+- Read what landed, `git log -1 --format=%B <merge-sha>` with the SHA from `gh pr view <n> --json mergeCommit -q .mergeCommit.oid`, and tell the user if its subject is not the PR's title with ` (#<n>)` added, or its body is not the PR's: a body lost at the merge (step 5), or a default the settings no longer supply (step 0). `<base>` refuses a force-push, so this only reports it.
 
 ## 6b. Re-stage the launcher
 The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a merge changes nothing the user runs until it is re-staged. Skip this when the merge changed nothing the build stages (`src/main` behaviour, `build.sbt`, `project/`), and say so.
@@ -105,9 +99,10 @@ The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a m
 ## 7. Dispose of the shipped branch
 **The working model is throwaway branches.** One branch per PR, cut from base, deleted after merge. `wip` is a *local-only parking branch* for the worktree — it is never pushed and has no upstream (`origin` holds `main` alone). That is deliberate: a published branch would have to be force-pushed to recycle, because squash-merge gives `main` a new SHA and the branch then diverges. Unpublished, recycling is a local fast-forward nobody has to approve.
 
-- **The shipped branch** — delete it: `git push origin --delete <branch>` (only if it was published and the user did not already press **Delete branch**), then catch `wip` up (below) and delete the local branch from there. That order is forced: git refuses to delete the branch you are standing on, and step 0 left you on it. No confirmation needed for a throwaway branch this flow cut in step 0, once the equality check below passes. A remote deleted from the UI before that check loses nothing — the local branch still holds the work until the check clears it.
-- **A delete denied by the classifier** ("Git Destructive") is handed over, not worked around: give the exact `git push origin --delete` / `git branch -D` commands for the user to run with `!`.
-- **Before deleting anything published, prove it holds nothing unique.** Compare each file the branch changed against the commit the merge actually produced, which is the only reference point that cannot move:
+- **The shipped branch** — GitHub deletes its remote at the merge, and step 6's `fetch --prune` drops the tracking ref. Catch `wip` up (below) and delete the local branch from there. That order is forced: git refuses to delete the branch you are standing on, and step 0 left you on it. No confirmation needed for a throwaway branch this flow cut in step 0, once the equality check below passes. The remote going first loses nothing — the local branch still holds the work until the check clears it.
+- **A remote that survived the merge** (`git ls-remote --heads origin <branch>` still prints it) is deleted with `git push origin --delete <branch>` once the check below passes, and reported: step 0's settings should have removed it.
+- **A delete denied by the classifier** ("Git Destructive") is handed over, not worked around: give the exact command for the user to run with `!`.
+- **Before deleting the local branch, prove it holds nothing unique.** Compare each file the branch changed against the commit the merge actually produced, which is the only reference point that cannot move:
 
   ```
   MERGED=$(gh pr view <n> --json mergeCommit -q .mergeCommit.oid)   # resolves for a squash merge too
@@ -115,7 +110,7 @@ The `ccas` launcher on `PATH` runs the build staged in the base worktree, so a m
   ```
 
   Empty means everything the branch changed is in that commit, so deletion loses nothing no matter what has landed since. Diff only those files: a PR merged between the branch's cut and its own merge is in `$MERGED` but not in the branch, so a whole-tree diff lists its files too (#339, merged 16 s after #338). Non-empty means STOP and ASK, whether the branch holds work the merge lacks or another PR changed one of its files. Cross-check with `gh pr list --state all --head <branch>`.
-- **`git branch -d` will refuse; that refusal is noise.** It tests commit reachability, which squash-merge always breaks. That empty diff is the proof `-d` wanted — use `git branch -D` once it is clean, never before. The remote delete fires `pre-push`, which self-skips on a delete-only push; nothing to bypass. It can instead fail with `remote ref does not exist` when the branch was already deleted from the UI — harmless, the branch is already gone.
+- **`git branch -d` will refuse; that refusal is noise.** It tests commit reachability, which squash-merge always breaks. That empty diff is the proof `-d` wanted — use `git branch -D` once it is clean, never before.
 - **Do not compare against `<base>` instead.** A PR landing on base after this merge makes the diff non-empty wherever it touched one of the branch's files, and nothing then distinguishes "branch has unique work" from "base has newer work". The merge commit stays put; base does not.
 - **Never use `git rev-list` counts or `git cherry` for this.** They compare commits rather than content, and squash-merge guarantees the two disagree: `rev-list` reads the branch as ahead because the squash is a new SHA, and `git cherry` compares *patch-ids*, so an N-commit branch collapsed into one squash commit yields N patch-ids matching nothing in base.
 - **Ambiguous, or the user calls a branch long-lived?** ASK before deleting. Deletion is irreversible from here.
@@ -137,7 +132,7 @@ Backref comments should already be posted (step 3b); this step adds the merge SH
 - Issues *deferred* or `pending-decision`: comment a backref (PR + SHA), keep open. Never auto-close a `pending-decision` item.
 - An issue filed from an item on another issue: backref that one too, naming the item, so it stops reading as open. #437 fixed an item of #405 without one, and a later survey picked the item again.
 - If no issue is resolved by the PR, say so explicitly rather than silently skipping the step.
-- If step 6 found the body lost, paste the commit body into the merge-SHA comment on the PR's main issue. Without it, the reason for the change survives only in the PR.
+- If step 6 found the body lost, say so in the merge-SHA comment on the PR's main issue. The PR's description still holds the text, so nothing is pasted.
 
 ## Output
 Finish with a compact status table: commit SHA, PR #, PR CI, merge SHA (merged by the user), base-worktree sync, launcher staged, branch disposal, main CI, issues touched. Mark any step that was refused or skipped as such — never leave a blocked step looking complete, and list the exact commands needed to finish it.
