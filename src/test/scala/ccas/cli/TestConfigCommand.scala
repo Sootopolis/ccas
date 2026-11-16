@@ -238,6 +238,35 @@ object TestConfigCommand extends ZIOSpecDefault {
           after <- read(file)
         } yield assertTrue(code == ExitCode.success, out.last == "aborted\n", after == before)
       },
+      test("over an existing file, Enter is no and leaves it untouched") {
+        val before = "SERVER_PORT=9090\n"
+        for {
+          file  <- seeded(before)
+          _     <- TestConsole.feedLines("")
+          code  <- ConfigCommand.init(file)
+          out   <- TestConsole.output
+          after <- read(file)
+        } yield assertTrue(
+          code == ExitCode.success,
+          out.head == s"$file already exists — update it with these values? [y/N] ",
+          out.last == "aborted\n",
+          after == before
+        )
+      },
+      test("an answer to save that is neither yes nor no is asked again") {
+        for {
+          file   <- envFile
+          _      <- TestConsole.feedLines((wizardAnswers.init ++ List("sure", "y"))*)
+          code   <- ConfigCommand.init(file)
+          out    <- TestConsole.output
+          stored <- ServerEnvFile.readMap(file)
+        } yield assertTrue(
+          code == ExitCode.success,
+          out.count(_ == s"Save to $file? [Y/n] ") == 2,
+          out.contains("  enter y or n\n"),
+          stored.contains("DATABASE_URL")
+        )
+      },
       test("over an existing file, answering yes updates what it asked and keeps the rest") {
         for {
           file   <- seeded("CCAS_CONTACT_EMAIL=old@example.com\nSERVER_PORT=9090\n")
@@ -249,9 +278,28 @@ object TestConfigCommand extends ZIOSpecDefault {
           stored == Map("CCAS_CONTACT_EMAIL" -> "me@example.com", "DATABASE_URL" -> url, "SERVER_PORT" -> "9090")
         )
       },
-      test("without a terminal, exits 1 and says it needs one") {
+      test("with no input, exits 1 and says it needs a terminal, whether or not the file exists") {
+        val before = "SERVER_PORT=9090\n"
+        for {
+          fresh    <- envFile
+          freshEnd <- ConfigCommand.init(fresh)
+          existing <- seeded(before)
+          overEnd  <- ConfigCommand.init(existing)
+          err      <- TestConsole.outputErr
+          wrote    <- exists(fresh)
+          after    <- read(existing)
+        } yield assertTrue(
+          freshEnd == ExitCode(1),
+          overEnd == ExitCode(1),
+          err == Vector.fill(2)("error: 'ccas config init' requires an interactive terminal\n"),
+          !wrote,
+          after == before
+        )
+      },
+      test("input that ends at the save question says it needs a terminal, and writes nothing") {
         for {
           file  <- envFile
+          _     <- TestConsole.feedLines(wizardAnswers.init*)
           code  <- ConfigCommand.init(file)
           err   <- TestConsole.outputErr
           wrote <- exists(file)

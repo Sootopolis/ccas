@@ -29,6 +29,7 @@ import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedReq
 import ccas.server.routes.RecruitmentCriteriaRoutes.CriteriaView
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleResponse, ScheduleResponse}
 import ccas.server.scheduler.{MisfirePolicy, TriggerType}
+import ccas.utils.YesNo
 import ccas.utils.errors.safeMessage
 
 /** Maps a parsed [[CliCommand]] to HTTP calls against the local server and renders the result, returning the process
@@ -794,7 +795,7 @@ object Dispatcher {
         api.getJson[ClubResult[CriteriaView]](CriteriaCommand.viewPath(criteriaName, chosen.query))
       }
       _         <- ZIO.foreachDiscard(view.recap)(line => Console.printLine(line).orDie)
-      confirmed <- CliPrompt.askYes("Run with these criteria?")
+      confirmed <- YesNo.ask("Run with these criteria?", default = true)
       edit = CriteriaCommand.setCommand(nonDefaultServerOption, club.slug, criteriaName)
       code <-
         if (confirmed) { submit(ClubTarget.byId(club.clubId), view.criteriaIdOption) }
@@ -884,7 +885,7 @@ object Dispatcher {
       _    <- Console.printLine(s"\nFound ${names.size} candidates:").orDie
       _    <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  ${profileUrlLine(n)}").orDie)
       _    <- Console.printLine("").orDie
-      mark <- CliPrompt.askYes(s"Mark all ${names.size} as invited to $club and copy to clipboard?")
+      mark <- YesNo.ask(s"Mark all ${names.size} as invited to $club and copy to clipboard?", default = true)
       _ <-
         if (mark) { confirmAndCopy(api, jobId) }
         else { Console.printLine(s"Left ${names.size} as deferred; they'll resurface on the next run.").orDie }

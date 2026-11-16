@@ -41,7 +41,7 @@ object BootGuard {
       case Right(addressOption) =>
         Option.when(!detachedChild && !addressOption.exists(_.isLoopback)) {
           val target = addressOption.fold("a database whose address can't be read from the configuration")(_.render)
-          s"Boot against $target? [y/N] "
+          s"Boot against $target?"
         }
     }
 

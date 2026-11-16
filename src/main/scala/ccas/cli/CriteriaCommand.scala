@@ -20,6 +20,7 @@ import ccas.server.routes.RecruitmentCriteriaRoutes.{
   SetCriteriaRequest,
   SetCriteriaResponse
 }
+import ccas.utils.YesNo
 
 /** `ccas recruitment-criteria show | set | list`: a club's named criteria, through the server's criteria routes. Each
   * settles its club as every club command does; `set` then names it by id.
@@ -178,7 +179,7 @@ private[cli] object CriteriaCommand {
         s"Saving makes a new version: every later run with ${ClubSlug.unwrap(club)}'s criteria \"$name\" uses it, " +
           "scheduled runs included."
       )
-      yes <- CliPrompt.askYes("Save?")
+      yes <- YesNo.ask("Save?", default = true)
     } yield yes
 
   // Prints the recap as the server stored it, so its version, and any lookback the server capped, are what's shown.
