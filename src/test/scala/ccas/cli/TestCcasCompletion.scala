@@ -13,9 +13,9 @@ import ccas.server.config.ServerEnvKeys
   *   1. the committed `completions/ccas.bash` equals the bash emitter output (regenerate it as
   *      `.claude/rules/cli.md` says);
   *   2. every emitted script is valid for its shell (`<shell> -n`, skipped when that shell isn't installed);
-  *   3. what the bash script offers for `config set`, whose second positional depends on its first;
-  *   4. [[CompletionSpec]] still covers every command and flag in the [[CliCommand]] tree, so a newly added
-  *      subcommand or flag can't silently go uncompleted;
+  *   3. what the scripts offer where the word before decides it: `config set`'s second positional, `--file`'s path;
+  *   4. [[CompletionSpec]] still covers every command and flag in the [[CliCommand]] tree, and describes each command
+  *      with its help, so a newly added subcommand or flag can't silently go uncompleted;
   *   5. README's `Commands:` line lists what [[CompletionSpec]] does;
   *   6. each script reads the completion cache from where the CLI writes it (skipped when that shell isn't installed).
   *
@@ -79,10 +79,13 @@ object TestCcasCompletion extends ZIOSpecDefault {
     * rc files, so bash-completion isn't loaded and the script reads `COMP_WORDS` itself. stderr joins the offers, so a
     * script that fails to load can't pass for one that offers nothing.
     */
-  private def bashOffers(words: String*): ZIO[Any, Throwable, List[String]] = {
+  private def bashOffers(words: String*): ZIO[Any, Throwable, List[String]] = bashOffersAfter("", words*)
+
+  /** As [[bashOffers]], once `prelude` has run: a stand-in for what the shell would have at a real `<TAB>`. */
+  private def bashOffersAfter(prelude: String, words: String*): ZIO[Any, Throwable, List[String]] = {
     val line = words.map(word => "'" + word + "'").mkString(" ")
     val script =
-      "source \"$1\"; COMP_WORDS=(" + line + "); COMP_CWORD=" + (words.size - 1) + "; _ccas; " +
+      prelude + "source \"$1\"; COMP_WORDS=(" + line + "); COMP_CWORD=" + (words.size - 1) + "; _ccas; " +
         "printf '%s\\n' \"${COMPREPLY[@]}\""
     for {
       tmp <- ZIO.attempt(Files.createTempFile("ccas-completion-", ".bash"))
@@ -97,6 +100,24 @@ object TestCcasCompletion extends ZIOSpecDefault {
       _      <- ZIO.attempt(Files.deleteIfExists(tmp))
     } yield output.linesIterator.filter(_.nonEmpty).toList
   }
+
+  /** What bash offers after `--file` for `typed` in a directory holding `names`, checked by `check` against that
+    * directory. `compopt` works only inside a real completion, so bash 4+'s is stood in for where `readlineQuotes`.
+    */
+  private def filesOffered(names: List[String], typed: String, readlineQuotes: Boolean)(
+    check: (Path, List[String]) => TestResult
+  ): ZIO[Any, Throwable, TestResult] =
+    TempWiring.withTempDir { root =>
+      val prelude = if (readlineQuotes) { "compopt() { return 0; }; " }
+      else { "" }
+      for {
+        _ <- ZIO.attemptBlocking(names.foreach(name => Files.writeString(root.resolve(name), "{}")))
+        result <- unlessNoShell {
+          bashOffersAfter(prelude, "ccas", "recruitment-criteria", "set", "--file", s"$root/$typed")
+            .map(check(root, _))
+        }
+      } yield result
+    }
 
   /** A shell, its emitted script, and the command line that sources a script and reads `clubs.txt` through its helper. */
   private final case class CacheReader(shell: String, script: String, argv: Path => List[String])
@@ -205,6 +226,48 @@ object TestCcasCompletion extends ZIOSpecDefault {
           typed   <- bashOffers("ccas", "config", "set", "SCHEDULER_HISTORY_ENABLED", "t")
         } yield assertTrue(backend == List("fs", "s3"), toggle == List("true", "false"), typed == List("true"))
       }
+    },
+    test("bash offers file paths after 'recruitment-criteria set --file'") {
+      filesOffered(List("criteria.json", "other.txt"), typed = "cr", readlineQuotes = true) { (root, offered) =>
+        assertTrue(offered == List(s"$root/criteria.json"))
+      }
+    },
+    test("where readline quotes names (bash 4+), a path with a space or a glob character is offered as it is") {
+      val names = List("my criteria.json", "crit[1].json", "crit1.json")
+      filesOffered(names, typed = "", readlineQuotes = true) { (root, offered) =>
+        assertTrue(offered.sorted == names.map(name => s"$root/$name").sorted)
+      }
+    },
+    test("where bash-completion is loaded, its _filedir offers the paths") {
+      unlessNoShell {
+        bashOffersAfter(
+          "_filedir() { COMPREPLY=(\"from _filedir: $cur\"); }; ",
+          "ccas",
+          "recruitment-criteria",
+          "set",
+          "--file",
+          "my"
+        )
+          .map(offered => assertTrue(offered == List("from _filedir: my")))
+      }
+    },
+    test("where readline can't quote names (bash 3.2), the script quotes them itself") {
+      filesOffered(List("my criteria.json"), typed = "my", readlineQuotes = false) { (root, offered) =>
+        assertTrue(offered == List(s"$root/my\\ criteria.json"))
+      }
+    },
+    test("zsh and fish offer files after --file") {
+      assertTrue(
+        CompletionEmitter.zsh.contains(s"${CompletionSpec.fileFlag}) _files; return ;;"),
+        CompletionEmitter.fish.linesIterator.exists(_.endsWith("-l file -r -F"))
+      )
+    },
+    test("every command has a summary, and it is the help --help shows for it") {
+      val paths   = CompletionSpec.leaves.map(_.path) ++ CompletionSpec.groups.map(group => List(group.name))
+      val missing = paths.filter(path => CompletionSpec.summary(path).isEmpty)
+      // Ends a line, so a summary cut short (`recruit`'s was a prefix of its help) is not shown.
+      val unshown = paths.filterNot(path => help.linesIterator.exists(_.trim.endsWith(CompletionSpec.summary(path))))
+      assertTrue(missing.isEmpty, unshown.isEmpty)
     },
     test("bash offers nothing after 'config set' on a free-form key") {
       unlessNoShell(bashOffers("ccas", "config", "set", "SERVER_PORT", "").map(offered => assertTrue(offered.isEmpty)))

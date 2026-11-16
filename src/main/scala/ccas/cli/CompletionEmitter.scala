@@ -60,6 +60,22 @@ object CompletionEmitter {
       "}"
     )
 
+  // bash: `_ccas_files` uses bash-completion's `_filedir` where loaded, which handles escapes, `~` and colons. Without
+  // it, paths are read line by line so a space or glob character stays in one candidate; compopt (bash 4+) has readline
+  // quote them, and bash 3.2 gets them quoted here, a directory without its `/`.
+  private val bashFilesFunction: List[String] =
+    List(
+      "_ccas_files() {",
+      "  if declare -F _filedir >/dev/null 2>&1; then _filedir; return; fi",
+      "  local f quote=1",
+      "  COMPREPLY=()",
+      "  compopt -o filenames 2>/dev/null && quote=0",
+      "  while IFS= read -r f; do",
+      "    if (( quote )); then COMPREPLY+=(\"$(printf '%q' \"$f\")\"); else COMPREPLY+=(\"$f\"); fi",
+      "  done < <(compgen -f -- \"$cur\")",
+      "}"
+    )
+
   // `--help` is appended by the emitted scripts themselves, so it is dropped from the per-command option list here.
   private def optsOf(leaf: Leaf): String = leaf.flags.filterNot(_ == "--help").mkString(" ")
 
@@ -119,11 +135,14 @@ object CompletionEmitter {
       "#",
       "# COMPREPLY=( $(compgen ...) ) is the standard, bash-3.2/macOS-safe completion idiom; the word-splitting is",
       "# intentional (compgen yields newline-separated, space-free candidates). mapfile is the SC2207 fix but is bash 4+.",
+      "# File paths may hold spaces or glob characters, so _ccas_files reads them line by line instead.",
       "# shellcheck disable=SC2207",
       ""
     ) ++ posixCacheFunction ++ List(
       ""
     ) ++ envValuesFunction ++ List(
+      ""
+    ) ++ bashFilesFunction ++ List(
       "",
       "_ccas() {",
       "  local cur prev words cword",
@@ -149,9 +168,10 @@ object CompletionEmitter {
       "    esac",
       "  done",
       "",
-      "  # Right after --club: offer cached club slugs. Right after any other value flag: offer nothing.",
+      "  # Right after --club: offer cached club slugs. After --file: paths. Right after any other value flag: nothing.",
       "  case \"$prev\" in",
       "    " + CompletionSpec.clubFlag + ") COMPREPLY=( $(compgen -W \"$(_ccas_cache clubs.txt)\" -- \"$cur\") ); return ;;",
+      "    " + CompletionSpec.fileFlag + ") _ccas_files; return ;;",
       "    " + valueGuard + ") return ;;",
       "  esac",
       "",
@@ -240,6 +260,7 @@ object CompletionEmitter {
       "",
       "  case \"$prev\" in",
       "    " + CompletionSpec.clubFlag + ") compadd -- ${(f)\"$(_ccas_cache clubs.txt)\"}; return ;;",
+      "    " + CompletionSpec.fileFlag + ") _files; return ;;",
       "    " + valueGuard + ") return ;;",
       "  esac",
       "",
@@ -295,9 +316,13 @@ object CompletionEmitter {
     // `--help` is on every command (zio-cli built-in); append it for parity with the bash/zsh scripts.
     (leaf.flags :+ "--help").distinct.map { f =>
       val rArg = if (leaf.valueFlags.contains(f)) " -r" else ""
-      // `--club` takes a club slug as its value: offer the cached slugs as its argument candidates.
-      val clubArg = if (f == CompletionSpec.clubFlag) " -a '(__fish_ccas_cache clubs.txt)'" else ""
-      "complete -c ccas -n '" + cond + "' -l " + fishLong(f) + rArg + clubArg
+      // `--club` takes a club slug as its value: offer the cached slugs as its argument candidates. `-F` offers files
+      // to `--file`, overriding the script's `complete -c ccas -f`.
+      val valueArg =
+        if (f == CompletionSpec.clubFlag) { " -a '(__fish_ccas_cache clubs.txt)'" }
+        else if (f == CompletionSpec.fileFlag) { " -F" }
+        else { "" }
+      "complete -c ccas -n '" + cond + "' -l " + fishLong(f) + rArg + valueArg
     }
   }
 
@@ -322,6 +347,10 @@ object CompletionEmitter {
   private def fishArgLine(when: String, offered: String): String =
     "complete -c ccas -n '" + when + "' -f -a '" + offered + "'"
 
+  // The help is free text from `CliCommand`, so what fish's double quotes would read as syntax is escaped.
+  private def fishDescription(path: List[String]): String =
+    "\"" + CompletionSpec.summary(path).replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$") + "\""
+
   val fish: String = {
     val header = List(
       "# fish completion for ccas — generated, pure-shell (JVM-free). See Sootopolis/ccas#49.",
@@ -338,17 +367,14 @@ object CompletionEmitter {
     )
     // Top-level subcommands (only before any subcommand is chosen).
     val topSubs = CompletionSpec.topLevel.map { name =>
-      val summary = CompletionSpec.groups.find(_.name == name).map(_.summary)
-        .orElse(CompletionSpec.topLevelLeaves.find(_.name == name).map(_.summary))
-        .getOrElse("")
-      "complete -c ccas -n '__fish_use_subcommand' -a '" + name + "' -d \"" + summary + "\""
+      "complete -c ccas -n '__fish_use_subcommand' -a '" + name + "' -d " + fishDescription(List(name))
     }
     // Group children (e.g. blacklist add/list/remove), shown once the group is seen but no child is.
     val groupChildren = CompletionSpec.groups.flatMap { g =>
       val notAny = "; and not __fish_seen_subcommand_from " + g.children.mkString(" ")
       CompletionSpec.leavesOf(g.name).map { l =>
         "complete -c ccas -n '__fish_seen_subcommand_from " + g.name + notAny + "' -a '" + l.name +
-          "' -d \"" + l.summary + "\""
+          "' -d " + fishDescription(l.path)
       }
     }
     val flagLines = CompletionSpec.leaves.flatMap(fishFlagLines) ++

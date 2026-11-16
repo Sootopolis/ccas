@@ -13,6 +13,7 @@
 #
 # COMPREPLY=( $(compgen ...) ) is the standard, bash-3.2/macOS-safe completion idiom; the word-splitting is
 # intentional (compgen yields newline-separated, space-free candidates). mapfile is the SC2207 fix but is bash 4+.
+# File paths may hold spaces or glob characters, so _ccas_files reads them line by line instead.
 # shellcheck disable=SC2207
 
 _ccas_cache() {
@@ -27,6 +28,16 @@ _ccas_env_values() {
     SCHEDULER_MATCHREF_ENABLED|SCHEDULER_CLUBDATA_ENABLED|SCHEDULER_HISTORY_ENABLED|SCHEDULER_MEMBERSHIP_ENABLED|DB_TCP_KEEP_ALIVE) echo "true false" ;;
     CCAS_BODY_STORE_BACKEND) echo "fs s3" ;;
   esac
+}
+
+_ccas_files() {
+  if declare -F _filedir >/dev/null 2>&1; then _filedir; return; fi
+  local f quote=1
+  COMPREPLY=()
+  compopt -o filenames 2>/dev/null && quote=0
+  while IFS= read -r f; do
+    if (( quote )); then COMPREPLY+=("$(printf '%q' "$f")"); else COMPREPLY+=("$f"); fi
+  done < <(compgen -f -- "$cur")
 }
 
 _ccas() {
@@ -53,9 +64,10 @@ _ccas() {
     esac
   done
 
-  # Right after --club: offer cached club slugs. Right after any other value flag: offer nothing.
+  # Right after --club: offer cached club slugs. After --file: paths. Right after any other value flag: nothing.
   case "$prev" in
     --club) COMPREPLY=( $(compgen -W "$(_ccas_cache clubs.txt)" -- "$cur") ); return ;;
+    --file) _ccas_files; return ;;
     --ready-timeout-seconds|--port|--server|--club|--club-id|--refresh-min-hours|--criteria|--target|--source-clubs|--time-limit-minutes|--file|--since|--until|--limit|--reason|--months|--kind|--interval-hours|--cron|--tz|--misfire|--params) return ;;
   esac
 
