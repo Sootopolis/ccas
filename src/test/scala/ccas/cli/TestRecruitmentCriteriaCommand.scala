@@ -182,6 +182,8 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
   private val ExcludeClubs         = 5
   private val DailyMinScoreRate    = 12
   private val DailyMaxScoreRate    = 13
+  private val DailyMinOngoingGames = 19
+  private val DailyMaxOngoingGames = 20
 
   // [[answers]], with the setting at `index` answered `refused` and then, asked again, `accepted`.
   private def answersAskedAgain(
@@ -401,6 +403,104 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
         posts.map(p => (p.criteria.dailyMinElo, p.criteria.dailyMaxElo)) ==
           List((Some(Elo(2000.toShort)), Some(Elo(2200.toShort))))
       )
+    },
+    test("a setting that breaks two rules is told both") {
+      val lines = answersAskedAgain(DailyMaxOngoingGames, "-1", "", DailyMinOngoingGames -> "10")
+      for {
+        _     <- TestConsole.feedLines((lines :+ "y")*)
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+        out   <- output
+      } yield assertTrue(
+        out.contains(
+          "  dailyMaxOngoingGames must be >= 0 (got -1); dailyOngoingGames min (10) must be <= max (-1)\n" +
+            "dailyMaxOngoingGames ["
+        ),
+        posts.map(_.criteria) == List(stored.copy(dailyMinOngoingGames = Some(10)))
+      )
+    },
+    test("each answer is saved to the setting it was asked for") {
+      val typed = List(
+        "100",
+        "101",
+        "102",
+        "y",
+        "GB,FR",
+        "team-beta",
+        "106",
+        "n",
+        "108",
+        "n",
+        "1010",
+        "1011",
+        "0.12",
+        "0.13",
+        "114",
+        "115",
+        "16",
+        "17",
+        "118",
+        "119",
+        "120",
+        "121"
+      )
+      val expected = RecruitmentCriteria(
+        criteriaId = 0,
+        minDaysSinceRegistration = Some(100),
+        daysSinceLastInvited = Some(101),
+        daysSinceRejected = Some(102),
+        nationalityExclude = true,
+        nationalityCountries = List("GB", "FR"),
+        excludeClubs = List(beta.clubId),
+        maxClubs = Some(106),
+        excludeSourceAdmins = false,
+        avoidAdminMinClubSize = Some(108),
+        excludeFormerMembers = false,
+        dailyMinElo = Some(Elo(1010.toShort)),
+        dailyMaxElo = Some(Elo(1011.toShort)),
+        dailyMinScoreRate = Some(0.12),
+        dailyMaxScoreRate = Some(0.13),
+        dailyMinGamesFinished = Some(114),
+        dailyMinTmGamesFinished = Some(115),
+        dailyMaxTimeoutPercent = Some(16.0),
+        dailyMaxTmTimeoutPercent = Some(17.0),
+        dailyMaxHoursPerMove = Some(118),
+        dailyMinOngoingGames = Some(119),
+        dailyMaxOngoingGames = Some(120),
+        dailyMinOngoingTeamMatches = Some(121)
+      )
+      for {
+        _     <- TestConsole.feedLines((typed :+ "y")*)
+        f     <- fake(withDefault)
+        _     <- set(f, Nil, None, interactive = true)
+        posts <- f.posts.get
+      } yield assertTrue(typed.size == SettingCount, posts.map(_.criteria) == List(CriteriaSpec.fromCriteria(expected)))
+    },
+    // A rule is checked at the prompt whose name is its setting, so this is what puts every rule before the operator.
+    test("each setting is asked under its own name, in the order the criteria hold them") {
+      for {
+        _   <- TestConsole.feedLines(answers()*)
+        f   <- fake(withDefault)
+        _   <- set(f, Nil, None, interactive = true)
+        out <- output
+      } yield {
+        val asked    = """(\w+) \[[^\]]*\] \(""".r.findAllMatchIn(out).map(_.group(1)).toList
+        val settings = RecruitmentCriteria.defaultDaily.productElementNames.filterNot(_ == "criteriaId").toList
+        assertTrue(asked == settings)
+      }
+    },
+    // `(Enter=keep, - =none)` is the prompt that checks the rules; a flag, list or clubs prompt doesn't yet.
+    test("every rule's setting is asked by a prompt that checks the rules") {
+      for {
+        _   <- TestConsole.feedLines(answers()*)
+        f   <- fake(withDefault)
+        _   <- set(f, Nil, None, interactive = true)
+        out <- output
+      } yield {
+        val checking = """(\w+) \[[^\]]*\] \(Enter=keep, - =none\)""".r.findAllMatchIn(out).map(_.group(1)).toSet
+        assertTrue(RecruitmentCriteria.Rules.map(_.setting).toSet.subsetOf(checking))
+      }
     },
     test("excluded clubs are shown and taken as slugs, named in the preview, and saved as ids") {
       val stays     = List(beta.clubId, ClubId(99), ClubId(500))

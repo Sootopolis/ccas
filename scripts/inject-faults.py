@@ -5,8 +5,8 @@
 
 faults.json is a list of faults, each one exact edit and the test that should catch it:
 
-    [{"name": "range check dropped", "file": "src/main/scala/ccas/cli/CriteriaPrompts.scala",
-      "old": "range(label, value).orElse(alsoCheck(value))", "new": "alsoCheck(value)",
+    [{"name": "range check dropped", "file": "src/main/scala/ccas/analysis/tables/RecruitmentCriteria.scala",
+      "old": "d < 0.0 || d > 1.0", "new": "d < 0.0",
       "suite": "ccas.cli.TestRecruitmentCriteriaCommand", "test": "a value out of range is asked again"}]
 
 Run it from the root of the tree under test; `file` is relative to it. Each named test is first run unbroken, since

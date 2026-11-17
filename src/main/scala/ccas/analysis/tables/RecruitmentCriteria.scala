@@ -5,7 +5,6 @@ import java.sql.SQLException
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.analysis.tables.RecruitmentCriteria.Check.{inPercent, inUnit, nonNeg, ordered}
 import ccas.api.misc.subtypes.{ClubId, Elo}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
@@ -41,56 +40,84 @@ final case class RecruitmentCriteria(
     daysSinceRejected = daysSinceRejected.map(_.min(RecruitmentCriteria.MaxDaysSinceLookback))
   )
 
-  /** Cross-field sanity checks beyond the per-field opaque-type validation. ([[capped]] applies the 180-day lookback
-    * cap, inside `insert`.) Surfaced as a `BadRequestException` by callers.
+  /** What the [[RecruitmentCriteria.Rules]] for `setting` find wrong with it here, as one message: the CLI asks for that
+    * setting again until there is none.
     */
-  def validate: Either[String, Unit] = {
-    val errors = List(
-      nonNeg("minDaysSinceRegistration", minDaysSinceRegistration),
-      nonNeg("daysSinceLastInvited", daysSinceLastInvited),
-      nonNeg("daysSinceRejected", daysSinceRejected),
-      nonNeg("maxClubs", maxClubs),
-      nonNeg("avoidAdminMinClubSize", avoidAdminMinClubSize),
-      nonNeg("dailyMinGamesFinished", dailyMinGamesFinished),
-      nonNeg("dailyMinTmGamesFinished", dailyMinTmGamesFinished),
-      nonNeg("dailyMaxHoursPerMove", dailyMaxHoursPerMove),
-      nonNeg("dailyMinOngoingGames", dailyMinOngoingGames),
-      nonNeg("dailyMaxOngoingGames", dailyMaxOngoingGames),
-      nonNeg("dailyMinOngoingTeamMatches", dailyMinOngoingTeamMatches),
-      inUnit("dailyMinScoreRate", dailyMinScoreRate),
-      inUnit("dailyMaxScoreRate", dailyMaxScoreRate),
-      inPercent("dailyMaxTimeoutPercent", dailyMaxTimeoutPercent),
-      inPercent("dailyMaxTmTimeoutPercent", dailyMaxTmTimeoutPercent),
-      ordered("dailyElo", dailyMinElo, dailyMaxElo),
-      ordered("dailyScoreRate", dailyMinScoreRate, dailyMaxScoreRate),
-      ordered("dailyOngoingGames", dailyMinOngoingGames, dailyMaxOngoingGames)
-    ).flatten
-    if (errors.isEmpty) Right(()) else Left(errors.mkString("; "))
-  }
+  def problemsAt(setting: String): Option[String] =
+    problems(RecruitmentCriteria.Rules.filter(_.setting == setting))
+
+  /** Every one of the [[RecruitmentCriteria.Rules]] these settings break, as one message. ([[capped]] applies the
+    * 180-day lookback cap, inside `insert`.) Surfaced as a `BadRequestException` by callers.
+    */
+  def validate: Either[String, Unit] =
+    problems(RecruitmentCriteria.Rules).toLeft(())
+
+  private def problems(rules: List[RecruitmentCriteria.Rule]): Option[String] =
+    rules.flatMap(_.check(this)) match {
+      case Nil   => None
+      case found => Some(found.mkString("; "))
+    }
 }
 
 object RecruitmentCriteria {
   val MaxDaysSinceLookback: Int = 180
 
-  /** The rules [[RecruitmentCriteria.validate]] applies, each giving what is wrong with a setting, if anything. The CLI
-    * applies the same ones as each setting is answered.
+  /** A rule the settings are held to, and the setting it is answered at, where a problem with it is reported. */
+  final case class Rule(setting: String, check: RecruitmentCriteria => Option[String])
+
+  /** Every rule, beyond what the settings' types already refuse: the one list, which the server saves by and the CLI
+    * asks by. A min/max pair is answered at its max, which is asked after the min, so it is judged once both are in.
     */
-  object Check {
-    def nonNeg(label: String, v: Option[Int]): Option[String] =
-      v.filter(_ < 0).map(x => s"$label must be >= 0 (got $x)")
+  val Rules: List[Rule] = List(
+    nonNeg("minDaysSinceRegistration", _.minDaysSinceRegistration),
+    nonNeg("daysSinceLastInvited", _.daysSinceLastInvited),
+    nonNeg("daysSinceRejected", _.daysSinceRejected),
+    nonNeg("maxClubs", _.maxClubs),
+    nonNeg("avoidAdminMinClubSize", _.avoidAdminMinClubSize),
+    nonNeg("dailyMinGamesFinished", _.dailyMinGamesFinished),
+    nonNeg("dailyMinTmGamesFinished", _.dailyMinTmGamesFinished),
+    nonNeg("dailyMaxHoursPerMove", _.dailyMaxHoursPerMove),
+    nonNeg("dailyMinOngoingGames", _.dailyMinOngoingGames),
+    nonNeg("dailyMaxOngoingGames", _.dailyMaxOngoingGames),
+    nonNeg("dailyMinOngoingTeamMatches", _.dailyMinOngoingTeamMatches),
+    inUnit("dailyMinScoreRate", _.dailyMinScoreRate),
+    inUnit("dailyMaxScoreRate", _.dailyMaxScoreRate),
+    inPercent("dailyMaxTimeoutPercent", _.dailyMaxTimeoutPercent),
+    inPercent("dailyMaxTmTimeoutPercent", _.dailyMaxTmTimeoutPercent),
+    ordered("dailyMaxElo", "dailyElo", _.dailyMinElo, _.dailyMaxElo),
+    ordered("dailyMaxScoreRate", "dailyScoreRate", _.dailyMinScoreRate, _.dailyMaxScoreRate),
+    ordered("dailyMaxOngoingGames", "dailyOngoingGames", _.dailyMinOngoingGames, _.dailyMaxOngoingGames)
+  )
 
-    def inUnit(label: String, v: Option[Double]): Option[String] =
-      v.filter(d => d < 0.0 || d > 1.0).map(x => s"$label must be in [0, 1] (got $x)")
+  private def nonNeg(setting: String, value: RecruitmentCriteria => Option[Int]): Rule =
+    Rule(setting, criteria => value(criteria).filter(_ < 0).map(x => s"$setting must be >= 0 (got $x)"))
 
-    def inPercent(label: String, v: Option[Double]): Option[String] =
-      v.filter(d => d < 0.0 || d > 100.0).map(x => s"$label must be in [0, 100] (got $x)")
+  private def inUnit(setting: String, value: RecruitmentCriteria => Option[Double]): Rule =
+    Rule(
+      setting,
+      criteria => value(criteria).filter(d => d < 0.0 || d > 1.0).map(x => s"$setting must be in [0, 1] (got $x)")
+    )
 
-    def ordered[A](label: String, lo: Option[A], hi: Option[A])(using ord: Ordering[A]): Option[String] =
-      (lo, hi) match {
-        case (Some(l), Some(h)) if ord.gt(l, h) => Some(s"$label min ($l) must be <= max ($h)")
-        case _                                  => None
-      }
-  }
+  private def inPercent(setting: String, value: RecruitmentCriteria => Option[Double]): Rule =
+    Rule(
+      setting,
+      criteria => value(criteria).filter(d => d < 0.0 || d > 100.0).map(x => s"$setting must be in [0, 100] (got $x)")
+    )
+
+  private def ordered[A](
+    setting: String,
+    pair: String,
+    min: RecruitmentCriteria => Option[A],
+    max: RecruitmentCriteria => Option[A]
+  )(using ord: Ordering[A]): Rule =
+    Rule(
+      setting,
+      criteria =>
+        (min(criteria), max(criteria)) match {
+          case (Some(lo), Some(hi)) if ord.gt(lo, hi) => Some(s"$pair min ($lo) must be <= max ($hi)")
+          case _                                      => None
+        }
+    )
 
   private val selectCols = SqlLiteral(
     """criteria_id,

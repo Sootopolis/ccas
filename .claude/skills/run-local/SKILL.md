@@ -53,6 +53,8 @@ Commands rewrite the club completion cache, and some read `current_club`. Run th
   | tr -d '\r' | sed 's/\x1b\[[0-9;]*[A-Za-z]//g'
 ```
 
+To test Ctrl-C, start the command from Python with `preexec_fn` resetting SIGINT to `SIG_DFL`, and write `\x03` to `script`'s stdin. A command started from Claude's shell inherits SIGINT as ignored, so a `kill -INT` or a typed ^C does nothing.
+
 The Bash tool's display capitalises the first word of a failing command's output: an `error:` line shows as `Error:`. Check the bytes (`| od -c`) before calling it a bug.
 
 ## 7. Clean up
