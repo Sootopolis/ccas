@@ -556,11 +556,25 @@ object Dispatcher {
     }
 
   // Nothing is prompted without a terminal: the error already names `--club-id`, which is this same choice made
-  // up front. The prompt goes to stderr so a piped stdout still carries only the command's own output, and an answer
-  // that isn't one of the offered numbers aborts rather than guessing at a club. Only the candidates that still hold
-  // a name are offered — one holding none resolves `Nameless` by id, so picking it could not run (#254).
+  // up front. The prompt goes to stderr so a piped stdout still carries only the command's own output. Only a blank
+  // answer or ended input aborts; any other answer that isn't an offered number is asked again, as a yes/no is
+  // (#496). Only candidates that still hold a name are offered: one holding none resolves `Nameless` by id (#254).
   private[cli] def promptForClub(ambiguous: ClubResolution.Ambiguous, interactive: Boolean): UIO[Option[ClubId]] = {
     val (offered, nameless) = ambiguous.holders.partition(_.slugOption.isDefined)
+    def ask: UIO[Option[ClubId]] =
+      for {
+        _            <- Console.printError(s"which club did you mean? [1-${offered.size}, blank to abort] ").orDie
+        answerOption <- Console.readLine.option
+        typed = answerOption.fold("")(_.trim)
+        picked <-
+          if (typed.isEmpty) { Console.printLineError("aborted").orDie.as(None) }
+          else {
+            typed.toIntOption.filter(n => n >= 1 && n <= offered.size) match {
+              case Some(n) => ZIO.some(offered(n - 1).clubId)
+              case None    => Console.printLineError(s"  enter a number from 1 to ${offered.size}").orDie *> ask
+            }
+          }
+      } yield picked
     if (!interactive || offered.isEmpty) { ZIO.none }
     else {
       for {
@@ -574,11 +588,8 @@ object Dispatcher {
         _ <- ZIO.whenDiscard(nameless.nonEmpty) {
           Console.printLineError(s"  (${nameless.size} more hold no name we know of, so nothing can run there)").orDie
         }
-        _      <- Console.printError(s"which club did you mean? [1-${offered.size}, blank to abort] ").orDie
-        answer <- Console.readLine.orElseSucceed("")
-        pickedOption = answer.trim.toIntOption.filter(n => n >= 1 && n <= offered.size)
-        _ <- ZIO.whenDiscard(pickedOption.isEmpty)(Console.printLineError("aborted").orDie)
-      } yield pickedOption.map(n => offered(n - 1).clubId)
+        pickedOption <- ask
+      } yield pickedOption
     }
   }
 
