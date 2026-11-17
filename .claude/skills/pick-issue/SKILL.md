@@ -34,6 +34,7 @@ Two to four sentences each:
 - what it costs today — the reason it is worth doing at all
 - the fix in one sentence, **plus its hidden cost** where there is one: a schema change needs a hand-written `ALTER` against every existing database, a CLI tree change needs `completions/ccas.bash` regenerated, some areas need an ADR read first
 - **plan first, or straight in**: straight in only when the fix is one obvious change, with no design choice and none of the areas CLAUDE.md's Workflow names
+- **effort**: the level the next stage calls for (CLAUDE.md, Workflow, Effort)
 
 Mention a label only where it changes the work: `pending-decision` means the deliverable is the user's call, not code.
 
@@ -48,4 +49,4 @@ Wait — do not start work on the recommendation before the answers come back.
 
 ## After the pick
 
-Before planning or editing, fetch the selected issue and its full comment history again. Reconcile any changed scope, dependencies, or completed work with the shortlist recap; the recap is not the working brief. Then read whatever the issue names — the ADRs in particular — before editing `ccas.utils.client`, the cache tables, or the CLI command tree. Plan or build, as answered, and follow CLAUDE.md's Workflow from there. Design thinking that comes out of the work belongs back in the issue, not only in the chat.
+First the effort check (CLAUDE.md, Workflow): if the level recommended for the next stage differs from `$CLAUDE_EFFORT`, stop there. Before planning or editing, fetch the selected issue and its full comment history again. Reconcile any changed scope, dependencies, or completed work with the shortlist recap; the recap is not the working brief. Then read whatever the issue names — the ADRs in particular — before editing `ccas.utils.client`, the cache tables, or the CLI command tree. Plan or build, as answered, and follow CLAUDE.md's Workflow from there. Design thinking that comes out of the work belongs back in the issue, not only in the chat.

@@ -39,6 +39,8 @@ Every piece of work runs the same sequence. Take each step unprompted; the devel
 4. **Before shipping**: open questions, follow-ups worth an issue, and anything the plan promised that has not landed.
 5. **Before the session ends**: stop background tasks, post the agreed issues and comments, save what a future session needs, and say whether the standards should change.
 
+**Effort.** Only the developer can change the session's effort level, and a change applies from their next message. So where they are about to answer anyway — after the pick, after the plan's approval, and in `/review-change`'s report — recommend a level for the work that follows, with the reason. If it differs from `$CLAUDE_EFFORT`, end the turn on the recommendation: the new level starts with their next message, which an `AskUserQuestion` answer is not. Otherwise carry on. Build and review share one level: they run as one turn without the developer. Start from xhigh when the change reaches an area step 1 names, or concurrency; high for other code; medium for docs, or for mechanical changes that tests already guard. The developer's trials recalibrate these.
+
 When unsure of anything — a finding, a design choice, what the developer meant — ask rather than guess. Put every question for the developer through `AskUserQuestion`, recommendation first, never as prose at the end of a report, where it gets missed.
 
 **Say how you know.** A claim about the code, the data or an outside system rests on something read or run in this session — a `file:line`, a command's output, a test name — cited when the developer will act on it; anything unchecked says so. Memory, of the code or of an earlier session, is a lead to check, not a source.

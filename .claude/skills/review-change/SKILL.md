@@ -9,7 +9,7 @@ The diff is where a review starts, not where it ends. The defects this review ex
 
 ## 1. Read the change
 
-`git status`, then `git merge-base origin/main HEAD` and `git diff <that commit>`, plus the untracked files, which a diff never shows: `git ls-files --others --exclude-standard`. Diffing against `origin/main` itself would show anything merged since the branch was cut as reversed in this change. Read the issue with its comments, and the agreed plan: the change is checked against what was promised, not only against itself.
+`printenv CLAUDE_EFFORT`, for the report. `git status`, then `git merge-base origin/main HEAD` and `git diff <that commit>`, plus the untracked files, which a diff never shows: `git ls-files --others --exclude-standard`. Diffing against `origin/main` itself would show anything merged since the branch was cut as reversed in this change. Read the issue with its comments, and the agreed plan: the change is checked against what was promised, not only against itself.
 
 ## 2. Map the blast radius
 
@@ -57,6 +57,7 @@ Label every finding **blocking**, **non-blocking**, **nit** or **question**, so 
 - what was found and fixed, one line each
 - judgement calls and questions, each in plain terms with a recommendation
 - what was run, and the result
+- the effort level the build started at and this review ran at, and the one recommended for the rest: the discussion of this report, and `/ship`'s agents (CLAUDE.md, Workflow, Effort)
 - for each new test, the fault injected into the code it guards and the failure that followed, so the user can trust a test by its name
 - for a bug fix, the change that introduced the bug and, if `/review-change` reviewed it (merged from #319 on), the `escape` label added to the issue
 - the few places worth the user's own reading, as `file:line`
