@@ -11,11 +11,11 @@ Take the work on the **current branch** through this repo's full release flow. B
 
 Most of this flow reads its state from git and GitHub, while this session carries the whole change, which every request re-reads. So this session keeps what needs it or the user, and hands the rest to `general-purpose` agents, which start fresh (#517):
 
-- **This session**: CLAUDE.md Workflow's before-shipping check, unless already reported for this change (an open question stops the ship until it is answered); the brief; step 5; and whatever an agent stops on.
+- **This session**: CLAUDE.md Workflow's before-shipping check, for what changed since `/review-change` reported it (an open question stops the ship until it is answered); the brief; step 5; whatever an agent stops on; and relaying each agent's report, the output table as written, refused steps included.
 - **First agent**: steps 0 to 4, with 3b.
 - **Second agent**, once step 5 sees `MERGED`: steps 6 to 9, and the output table.
 
-A tree the brief splits into several PRs goes round this once per PR, as "Splitting one working tree" below sets out. The brief carries what git and GitHub do not: the user's request to ship, quoted; the commit message (step 1); the PR's Testing notes (step 3); and each issue's part in steps 3b and 9 (resolved, deferred, `pending-decision`, or filed from an item on another issue). Each agent runs at the effort level the user gave when asking to ship, or else the one `/review-change` recommended. An agent never asks the user anything: where this skill says to stop or ask, it reports back, this session takes it up, and `SendMessage` continues the same agent. Until the first agent reports, run nothing that touches the working tree or `ccas_test`: its push runs the full suite.
+A tree the brief splits into several PRs goes round this once per PR, as "Splitting one working tree" below sets out. The brief carries what git and GitHub do not: the user's request to ship, quoted, or their "Ship now" answer to the review; the commit message (step 1); the PR's Testing notes (step 3); and each issue's part in steps 3b and 9 (resolved, deferred, `pending-decision`, or filed from an item on another issue). Each agent runs at the effort level the user gave when asking to ship, or else the one `/review-change` named for them. An agent never asks the user anything: where this skill says to stop or ask, it reports back, this session takes it up, and `SendMessage` continues the same agent. Until the first agent reports, run nothing that touches the working tree or `ccas_test`: its push runs the full suite.
 
 ## 0. Preflight (gather, don't assume)
 - Current branch: `git rev-parse --abbrev-ref HEAD`.
@@ -143,9 +143,9 @@ Because step 1 keeps `wip` free of commits of its own, it can only ever lag the 
 - `gh run list --commit <merge-sha> --json databaseId,event,status` → take the `push` run, then `gh run watch <id> --interval 20 --exit-status`. Look the run up by the merge commit, never as the newest run on base: that is not automatically yours — another PR may have landed since the merge, and `--branch <base> --limit 1` has listed a month-old run first with nothing else landing (#282). An empty list means GitHub has not registered the push yet; re-query rather than falling back to the newest run. Report green/red.
 
 ## 9. Update issues
-Backref comments should already be posted (step 3b); this step adds the merge SHA and closes what the PR resolved.
-- Issues the PR *resolves*: `gh issue comment` with the PR link + merge SHA, then `gh issue close` if it is still open. A closing keyword in the PR body (`Resolves #N`) closes the issue at merge, and `gh issue close --comment` on a closed issue refuses without posting the comment — so never let it carry the comment.
-- Issues *deferred* or `pending-decision`: comment a backref (PR + SHA), keep open. Never auto-close a `pending-decision` item.
+Backref comments should already be posted (step 3b); this step adds the merge SHA to each and closes what the PR resolved. One comment per issue: edit step 3b's with `gh issue comment <n> --edit-last`, once `gh issue view <n> --comments` shows it is still the user's last comment there; otherwise post a new one.
+- Issues the PR *resolves*: the PR link + merge SHA, then `gh issue close` if it is still open. A closing keyword in the PR body (`Resolves #N`) closes the issue at merge, and `gh issue close --comment` on a closed issue refuses without posting the comment — so never let it carry the comment.
+- Issues *deferred* or `pending-decision`: a backref (PR + SHA), keep open. Never auto-close a `pending-decision` item.
 - An issue filed from an item on another issue: backref that one too, naming the item, so it stops reading as open. #437 fixed an item of #405 without one, and a later survey picked the item again.
 - If no issue is resolved by the PR, say so explicitly rather than silently skipping the step.
 - If step 6 found the body lost, paste the commit body into the merge-SHA comment on the PR's main issue. Without it, the reason for the change survives only in the PR.
