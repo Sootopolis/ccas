@@ -51,17 +51,23 @@ Ask before acting on anything you are unsure of, any judgement call, and anythin
 
 ## 5. Report
 
-Label every finding **blocking**, **non-blocking**, **nit** or **question**, so the report can be skimmed for what matters.
+Open with three lines: what the operator will see differ; the state (suite green or red, findings fixed, questions open); and whether it is ready to ship once those are answered. Label every finding **blocking**, **non-blocking**, **nit** or **question**, so the report can be skimmed for what matters. Then:
 
-- the change as it now stands, before anything about the review: what the operator will see differ, what changed and where, and each way it departs from the agreed plan, including departures the review itself made
-- what was found and fixed, one line each
 - judgement calls and questions, each in plain terms with a recommendation
+- the before-shipping check (CLAUDE.md, Workflow, step 4): open questions, follow-ups worth an issue, and anything the plan promised that has not landed
+- the change as it now stands: what changed and where, and each way it departs from the agreed plan, including departures the review itself made
+- what was found and fixed, one line each
+- the level this review ran at, and the one for `/ship`'s agents; recommend changing the session's level only when more building follows in this session (CLAUDE.md, Workflow, Effort)
+- for a large change, an offer of a second review by a fresh agent that sees only the diff, the issue and the plan, since this review shares the author's blind spots. Recommend it when the change reaches an area Workflow step 1 names, or concurrency; otherwise recommend against.
+
+Under a **Reference** heading, last:
+
 - what was run, and the result
-- the effort level the build started at and this review ran at, and the one recommended for the rest: the discussion of this report, and `/ship`'s agents (CLAUDE.md, Workflow, Effort)
 - for each new test, the fault injected into the code it guards and the failure that followed, so the user can trust a test by its name
 - for a bug fix, the change that introduced the bug and, if `/review-change` reviewed it (merged from #319 on), the `escape` label added to the issue
 - the few places worth the user's own reading, as `file:line`
 - a draft commit message, to `/ship`'s rules for one (step 1), so the user has read it before shipping
-- for a large change, an offer of a second review by a fresh agent that sees only the diff, the issue and the plan, since this review shares the author's blind spots. It costs more, so the user decides each time.
 
-Leave the changes uncommitted (CLAUDE.md, Git).
+End with one `AskUserQuestion` call: the report's questions, and a last one for the next step, offering "Ship now" (recommended when nothing blocks), the second review where offered, and "Hold". "Ship now" is the go-ahead for `/ship` (CLAUDE.md, Git).
+
+Leave the changes uncommitted (CLAUDE.md, Git), unless the answer is "Ship now", which starts `/ship`.
