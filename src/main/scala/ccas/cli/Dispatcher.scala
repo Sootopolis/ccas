@@ -29,7 +29,7 @@ import ccas.server.routes.ManagedClubRoutes.{ManagedClubResponse, MarkManagedReq
 import ccas.server.routes.RecruitmentCriteriaRoutes.CriteriaView
 import ccas.server.routes.ScheduleRoutes.{CreateScheduleRequest, CreateScheduleResponse, ScheduleResponse}
 import ccas.server.scheduler.{MisfirePolicy, TriggerType}
-import ccas.utils.YesNo
+import ccas.utils.{Question, YesNo}
 import ccas.utils.errors.safeMessage
 
 /** Maps a parsed [[CliCommand]] to HTTP calls against the local server and renders the result, returning the process
@@ -560,21 +560,24 @@ object Dispatcher {
   // answer or ended input aborts; any other answer that isn't an offered number is asked again, as a yes/no is
   // (#496). Only candidates that still hold a name are offered: one holding none resolves `Nameless` by id (#254).
   private[cli] def promptForClub(ambiguous: ClubResolution.Ambiguous, interactive: Boolean): UIO[Option[ClubId]] = {
-    val (offered, nameless) = ambiguous.holders.partition(_.slugOption.isDefined)
-    def ask: UIO[Option[ClubId]] =
-      for {
-        _            <- Console.printError(s"which club did you mean? [1-${offered.size}, blank to abort] ").orDie
-        answerOption <- Console.readLine.option
-        typed = answerOption.fold("")(_.trim)
-        picked <-
-          if (typed.isEmpty) { Console.printLineError("aborted").orDie.as(None) }
-          else {
-            typed.toIntOption.filter(n => n >= 1 && n <= offered.size) match {
-              case Some(n) => ZIO.some(offered(n - 1).clubId)
-              case None    => Console.printLineError(s"  enter a number from 1 to ${offered.size}").orDie *> ask
-            }
-          }
-      } yield picked
+    val (offered, nameless)          = ambiguous.holders.partition(_.slugOption.isDefined)
+    val aborted: UIO[Option[ClubId]] = Console.printLineError("aborted").orDie.as(None)
+    val ask: UIO[Option[ClubId]] = Question.ask(
+      s"which club did you mean? [1-${offered.size}, blank to abort] ",
+      Console.readLine.option,
+      Console.printError(_).orDie,
+      aborted
+    ) { typed =>
+      if (typed.isEmpty) { aborted.asRight }
+      else {
+        ZIO.succeed(
+          typed.toIntOption
+            .filter(n => n >= 1 && n <= offered.size)
+            .map(n => Some(offered(n - 1).clubId))
+            .toRight(s"enter a number from 1 to ${offered.size}")
+        )
+      }
+    }
     if (!interactive || offered.isEmpty) { ZIO.none }
     else {
       for {

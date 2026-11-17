@@ -70,6 +70,9 @@ private[cli] object CriteriaPrompts {
   private def prompt(label: String): Task[String] =
     CliPrompt.line(label, Ended)
 
+  private def ask[A](label: String)(answer: String => Task[Either[String, A]]): Task[A] =
+    CliPrompt.ask(label, Ended)(answer)
+
   /** Asks until the answer parses and, written into the criteria by `fill`, breaks none of the
     * [[RecruitmentCriteria.Rules]] for `label`, a kept answer included: the max of a min/max pair is judged against the
     * min, which may have changed. The only prompt that checks them: a rule for a setting asked any other way fails
@@ -83,16 +86,13 @@ private[cli] object CriteriaPrompts {
     fill: Option[A] => RecruitmentCriteria
   ): Task[RecruitmentCriteria] = {
     val shown = current.fold("none")(show)
-    prompt(s"$label [$shown] (Enter=keep, - =none): ").flatMap { typed =>
+    ask(s"$label [$shown] (Enter=keep, - =none): ") { typed =>
       val answer = typed match {
         case ""  => Right(current)
         case "-" => Right(None)
         case s   => parse(s).map(Some(_))
       }
-      answer.map(fill).flatMap(answered => answered.problemsAt(label).toLeft(answered)) match {
-        case Right(answered) => ZIO.succeed(answered)
-        case Left(problem)   => Console.printLine(s"  $problem") *> promptOpt(label, current, show, parse, fill)
-      }
+      ZIO.succeed(answer.map(fill).flatMap(answered => answered.problemsAt(label).toLeft(answered)))
     }
   }
 
@@ -141,29 +141,23 @@ private[cli] object CriteriaPrompts {
   /** Clubs shown and taken by slug, or as `#<id>`, the form a club the server can't name is shown in. */
   private def promptClubs(label: String, current: List[ClubId], clubs: ClubNames): Task[List[ClubId]] =
     ZIO.foreachPar(current)(clubs.name).withParallelism(LookupParallelism).flatMap { shown =>
-      askClubs(
-        s"$label [${shown.mkString(",")}] (comma-separated slugs or #ids, Enter=keep, - =empty): ",
-        current,
-        clubs
-      )
+      ask(s"$label [${shown.mkString(",")}] (comma-separated slugs or #ids, Enter=keep, - =empty): ") {
+        case ""    => ZIO.right(current)
+        case "-"   => ZIO.right(Nil)
+        case typed => clubsTyped(typed, clubs)
+      }
     }
 
   // A line is taken whole or asked again whole, so a name's note is shown only once every name on it is found.
-  private def askClubs(question: String, current: List[ClubId], clubs: ClubNames): Task[List[ClubId]] =
-    prompt(question).flatMap {
-      case ""  => ZIO.succeed(current)
-      case "-" => ZIO.succeed(Nil)
-      case typed =>
-        val names = typed.split(',').map(_.trim).filter(_.nonEmpty).toList
-        ZIO.foreachPar(names)(club(_, clubs)).withParallelism(LookupParallelism).flatMap { found =>
-          found.partitionMap(identity) match {
-            case (Nil, reached) =>
-              clubs.note(reached.flatMap(_.noteOption)).as(reached.map(_.clubId).distinct)
-            case (problems, _) =>
-              Console.printLine(s"  ${problems.mkString("; ")}") *> askClubs(question, current, clubs)
-          }
-        }
+  private def clubsTyped(typed: String, clubs: ClubNames): Task[Either[String, List[ClubId]]] = {
+    val names = typed.split(',').map(_.trim).filter(_.nonEmpty).toList
+    ZIO.foreachPar(names)(club(_, clubs)).withParallelism(LookupParallelism).flatMap { found =>
+      found.partitionMap(identity) match {
+        case (Nil, reached) => clubs.note(reached.flatMap(_.noteOption)).as(Right(reached.map(_.clubId).distinct))
+        case (problems, _)  => ZIO.left(problems.mkString("; "))
+      }
     }
+  }
 
   // `#<id>` is the club's identity and needs no server. Anything else is a slug, found through it, digits included,
   // since a slug can be all digits.

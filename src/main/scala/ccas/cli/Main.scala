@@ -20,7 +20,7 @@ import ccas.server.config.ServerEnvOverlay
 object Main extends ZIOAppDefault {
 
   override def run: ZIO[ZIOAppArgs & Scope, Any, Any] =
-    ZIO.withConsole(StdinConsole)(commandLine)
+    StdinConsole.make.flatMap(ZIO.withConsole(_)(commandLine))
 
   private def commandLine: ZIO[ZIOAppArgs, Any, Any] =
     ZIOAppArgs.getArgs.flatMap { args =>

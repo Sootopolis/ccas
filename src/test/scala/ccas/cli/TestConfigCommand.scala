@@ -267,6 +267,34 @@ object TestConfigCommand extends ZIOSpecDefault {
           stored.contains("DATABASE_URL")
         )
       },
+      test("a required value left blank is asked again") {
+        for {
+          file   <- envFile
+          _      <- TestConsole.feedLines(("" :: wizardAnswers)*)
+          code   <- ConfigCommand.init(file)
+          out    <- TestConsole.output
+          stored <- ServerEnvFile.readMap(file)
+        } yield assertTrue(
+          code == ExitCode.success,
+          out.count(_ == "Contact email (CCAS_CONTACT_EMAIL): ") == 2,
+          out.contains("  value is required\n"),
+          stored.get("CCAS_CONTACT_EMAIL").contains("me@example.com")
+        )
+      },
+      test("a database choice other than 1 or 2 is asked again") {
+        for {
+          file   <- envFile
+          _      <- TestConsole.feedLines((wizardAnswers.head :: "3" :: wizardAnswers.tail)*)
+          code   <- ConfigCommand.init(file)
+          out    <- TestConsole.output
+          stored <- ServerEnvFile.readMap(file)
+        } yield assertTrue(
+          code == ExitCode.success,
+          out.count(_.startsWith("Database connection: ")) == 2,
+          out.contains("  enter 1 or 2\n"),
+          stored.get("DATABASE_URL").contains(url)
+        )
+      },
       test("over an existing file, answering yes updates what it asked and keeps the rest") {
         for {
           file   <- seeded("CCAS_CONTACT_EMAIL=old@example.com\nSERVER_PORT=9090\n")
