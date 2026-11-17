@@ -145,12 +145,13 @@ object ConfigCommand {
     ServerEnvFile.setAll(file, pairs) *> Console.printLine(s"wrote $file").as(ExitCode.success)
 
   private def promptDatabase: Task[List[(String, String)]] =
-    prompt(
-      "Database connection: [1] full JDBC URL  [2] separate host/port/name/user/password — choose [1/2]: "
-    ).flatMap {
-      case "1" | "" => promptDbUrl
-      case "2"      => promptDbFields
-      case _        => Console.printLine("  enter 1 or 2") *> promptDatabase
+    ask("Database connection: [1] full JDBC URL  [2] separate host/port/name/user/password — choose [1/2]: ") {
+      case "1" | "" => ZIO.right(true)
+      case "2"      => ZIO.right(false)
+      case _        => ZIO.left("enter 1 or 2")
+    }.flatMap { byUrl =>
+      if (byUrl) { promptDbUrl }
+      else { promptDbFields }
     }
 
   private def promptDbUrl: Task[List[(String, String)]] =
@@ -178,14 +179,14 @@ object ConfigCommand {
   private val NeedsTerminal = "'ccas config init' requires an interactive terminal"
 
   // `init` is interactive-only, so input that ends (`ccas config init </dev/null`), at any question, says so.
+  private def ask[A](label: String)(answer: String => Task[Either[String, A]]): Task[A] =
+    CliPrompt.ask(label, ended = NeedsTerminal)(answer)
+
   private def prompt(label: String): Task[String] =
     CliPrompt.line(label, ended = NeedsTerminal)
 
   private def promptRequired(label: String): Task[String] =
-    prompt(label).flatMap { s =>
-      if (s.nonEmpty) { ZIO.succeed(s) }
-      else { Console.printLine("  value is required") *> promptRequired(label) }
-    }
+    ask(label)(s => ZIO.succeed(Option.when(s.nonEmpty)(s).toRight("value is required")))
 
   private def promptOptional(label: String): Task[Option[String]] =
     prompt(label).map(s => Option(s).filter(_.nonEmpty))

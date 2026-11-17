@@ -4,7 +4,7 @@ import zio.{Console, IO, UIO, ZIO}
 
 /** How every yes/no question reads its answer, wherever it reads it from: Enter takes the default, `y`/`yes` or
   * `n`/`no` answers in any case, and anything else asks again, so a typo neither goes ahead nor quietly declines.
-  * [[askWith]] is the one loop that asks again; every yes/no question goes through it.
+  * [[askWith]] is the yes/no case of [[Question.ask]]; every yes/no question goes through it.
   */
 object YesNo {
 
@@ -27,16 +27,7 @@ object YesNo {
     write: String => IO[E, Unit],
     ended: IO[E, Boolean]
   ): IO[E, Boolean] =
-    for {
-      _            <- write(shown)
-      answerOption <- readLine
-      yes <- answerOption.fold(ended) { typed =>
-        read(typed, default) match {
-          case Some(yes) => ZIO.succeed(yes)
-          case None      => write(AskAgain + "\n") *> askWith(shown, default, readLine, write, ended)
-        }
-      }
-    } yield yes
+    Question.ask(shown, readLine, write, ended)(typed => ZIO.succeed(read(typed, default).toRight(AskAgain)))
 
   /** `question` followed by the hint that shows the default in capitals: `[Y/n]` or `[y/N]`. */
   def prompt(question: String, default: Boolean): String =
@@ -52,6 +43,6 @@ object YesNo {
       case _           => None
     }
 
-  /** What a question prints when an answer gives none. */
-  val AskAgain = "  enter y or n"
+  /** The problem a question shows when an answer gives none. */
+  val AskAgain = "enter y or n"
 }
