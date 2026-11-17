@@ -596,14 +596,16 @@ object TestRecruitmentCriteriaCommand extends ZIOSpecDefault {
         !out.contains("Save?")
       )
     },
-    test("input that ends before every setting is answered is named, and nothing is saved") {
+    test("input that ends at a yes/no setting is named there, nothing more is asked, and nothing is saved") {
       for {
-        _     <- TestConsole.feedLines("", "", "")
+        _     <- TestConsole.feedLines(answers().take(NationalityExclude)*)
         f     <- fake(withDefault)
         exit  <- set(f, Nil, None, interactive = true).exit
         posts <- f.posts.get
+        out   <- output
       } yield assertTrue(
         failure(exit).exists(_.message == "input ended before every setting was answered"),
+        out.endsWith("nationalityExclude [no] (y/n, Enter=keep): "),
         posts.isEmpty
       )
     },

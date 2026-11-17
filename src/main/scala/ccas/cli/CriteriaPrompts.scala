@@ -94,8 +94,10 @@ private[cli] object CriteriaPrompts {
       dailyMinOngoingTeamMatches = dailyMinOngoingTeamMatches
     )
 
+  private val Ended = "input ended before every setting was answered"
+
   private def prompt(label: String): Task[String] =
-    CliPrompt.line(label, ended = "input ended before every setting was answered")
+    CliPrompt.line(label, Ended)
 
   /** Asks until the answer parses and `check` finds nothing wrong with the setting it gives, a kept one included: the
     * second of a min/max pair is checked against the first, which may have changed.
@@ -174,12 +176,8 @@ private[cli] object CriteriaPrompts {
   private def promptBool(label: String, current: Boolean): Task[Boolean] = {
     val shown = if (current) { "yes" }
     else { "no" }
-    prompt(s"$label [$shown] (y/n, Enter=keep): ").flatMap { typed =>
-      YesNo.read(typed, default = current) match {
-        case Some(answer) => ZIO.succeed(answer)
-        case None         => Console.printLine(YesNo.AskAgain) *> promptBool(label, current)
-      }
-    }
+    val question = s"$label [$shown] (y/n, Enter=keep): "
+    YesNo.askWith(question, current, CliPrompt.readLine, Console.print(_), ZIO.fail(CliError(Ended, 1)))
   }
 
   private def promptStrList(label: String, current: List[String]): Task[List[String]] =
