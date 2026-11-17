@@ -3,7 +3,6 @@ package ccas.cli
 import zio.{Console, Task, UIO, ZIO}
 
 import ccas.analysis.tables.RecruitmentCriteria
-import ccas.analysis.tables.RecruitmentCriteria.Check
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo}
 import ccas.utils.YesNo
 
@@ -33,82 +32,56 @@ private[cli] object CriteriaPrompts {
 
   /** Prints `heading`, then asks for every setting, starting from `base`. */
   def criteria(heading: String, base: RecruitmentCriteria, clubs: ClubNames): Task[RecruitmentCriteria] =
-    for {
-      _                        <- Console.printLine(heading)
-      minDaysSinceRegistration <- promptCount("minDaysSinceRegistration", base.minDaysSinceRegistration)
-      daysSinceLastInvited     <- promptCount("daysSinceLastInvited", base.daysSinceLastInvited)
-      daysSinceRejected        <- promptCount("daysSinceRejected", base.daysSinceRejected)
-      nationalityExclude       <- promptBool("nationalityExclude", base.nationalityExclude)
-      nationalityCountries     <- promptStrList("nationalityCountries", base.nationalityCountries)
-      excludeClubs             <- promptClubs("excludeClubs", base.excludeClubs, clubs)
-      maxClubs                 <- promptCount("maxClubs", base.maxClubs)
-      excludeSourceAdmins      <- promptBool("excludeSourceAdmins", base.excludeSourceAdmins)
-      avoidAdminMinClubSize    <- promptCount("avoidAdminMinClubSize", base.avoidAdminMinClubSize)
-      excludeFormerMembers     <- promptBool("excludeFormerMembers", base.excludeFormerMembers)
-      dailyMinElo              <- promptOptElo("dailyMinElo", base.dailyMinElo, _ => None)
-      dailyMaxElo       <- promptOptElo("dailyMaxElo", base.dailyMaxElo, Check.ordered("dailyElo", dailyMinElo, _))
-      dailyMinScoreRate <- promptRate("dailyMinScoreRate", base.dailyMinScoreRate, Check.inUnit, _ => None)
-      dailyMaxScoreRate <- promptRate(
-        label = "dailyMaxScoreRate",
-        current = base.dailyMaxScoreRate,
-        range = Check.inUnit,
-        alsoCheck = Check.ordered("dailyScoreRate", dailyMinScoreRate, _)
-      )
-      dailyMinGamesFinished   <- promptCount("dailyMinGamesFinished", base.dailyMinGamesFinished)
-      dailyMinTmGamesFinished <- promptCount("dailyMinTmGamesFinished", base.dailyMinTmGamesFinished)
-      dailyMaxTimeoutPercent <-
-        promptRate("dailyMaxTimeoutPercent", base.dailyMaxTimeoutPercent, Check.inPercent, _ => None)
-      dailyMaxTmTimeoutPercent <-
-        promptRate("dailyMaxTmTimeoutPercent", base.dailyMaxTmTimeoutPercent, Check.inPercent, _ => None)
-      dailyMaxHoursPerMove <- promptCount("dailyMaxHoursPerMove", base.dailyMaxHoursPerMove)
-      dailyMinOngoingGames <- promptCount("dailyMinOngoingGames", base.dailyMinOngoingGames)
-      dailyMaxOngoingGames <- promptCountAnd(
-        label = "dailyMaxOngoingGames",
-        current = base.dailyMaxOngoingGames,
-        alsoCheck = Check.ordered("dailyOngoingGames", dailyMinOngoingGames, _)
-      )
-      dailyMinOngoingTeamMatches <- promptCount("dailyMinOngoingTeamMatches", base.dailyMinOngoingTeamMatches)
-    } yield RecruitmentCriteria(
-      criteriaId = 0,
-      minDaysSinceRegistration = minDaysSinceRegistration,
-      daysSinceLastInvited = daysSinceLastInvited,
-      daysSinceRejected = daysSinceRejected,
-      nationalityExclude = nationalityExclude,
-      nationalityCountries = nationalityCountries,
-      excludeClubs = excludeClubs,
-      maxClubs = maxClubs,
-      excludeSourceAdmins = excludeSourceAdmins,
-      avoidAdminMinClubSize = avoidAdminMinClubSize,
-      excludeFormerMembers = excludeFormerMembers,
-      dailyMinElo = dailyMinElo,
-      dailyMaxElo = dailyMaxElo,
-      dailyMinScoreRate = dailyMinScoreRate,
-      dailyMaxScoreRate = dailyMaxScoreRate,
-      dailyMinGamesFinished = dailyMinGamesFinished,
-      dailyMinTmGamesFinished = dailyMinTmGamesFinished,
-      dailyMaxTimeoutPercent = dailyMaxTimeoutPercent,
-      dailyMaxTmTimeoutPercent = dailyMaxTmTimeoutPercent,
-      dailyMaxHoursPerMove = dailyMaxHoursPerMove,
-      dailyMinOngoingGames = dailyMinOngoingGames,
-      dailyMaxOngoingGames = dailyMaxOngoingGames,
-      dailyMinOngoingTeamMatches = dailyMinOngoingTeamMatches
-    )
+    Console.printLine(heading) *>
+      ZIO.foldLeft(steps(clubs))(base.copy(criteriaId = 0))((answered, step) => step(answered))
+
+  // One per setting, in the order the criteria hold them: each offers the setting from the answers so far and writes
+  // the operator's answer back into them, where the rules can see it beside every earlier one.
+  private def steps(clubs: ClubNames): List[RecruitmentCriteria => Task[RecruitmentCriteria]] = List(
+    c => promptCount("minDaysSinceRegistration", c.minDaysSinceRegistration)(v => c.copy(minDaysSinceRegistration = v)),
+    c => promptCount("daysSinceLastInvited", c.daysSinceLastInvited)(v => c.copy(daysSinceLastInvited = v)),
+    c => promptCount("daysSinceRejected", c.daysSinceRejected)(v => c.copy(daysSinceRejected = v)),
+    c => promptBool("nationalityExclude", c.nationalityExclude).map(v => c.copy(nationalityExclude = v)),
+    c => promptStrList("nationalityCountries", c.nationalityCountries).map(v => c.copy(nationalityCountries = v)),
+    c => promptClubs("excludeClubs", c.excludeClubs, clubs).map(v => c.copy(excludeClubs = v)),
+    c => promptCount("maxClubs", c.maxClubs)(v => c.copy(maxClubs = v)),
+    c => promptBool("excludeSourceAdmins", c.excludeSourceAdmins).map(v => c.copy(excludeSourceAdmins = v)),
+    c => promptCount("avoidAdminMinClubSize", c.avoidAdminMinClubSize)(v => c.copy(avoidAdminMinClubSize = v)),
+    c => promptBool("excludeFormerMembers", c.excludeFormerMembers).map(v => c.copy(excludeFormerMembers = v)),
+    c => promptElo("dailyMinElo", c.dailyMinElo)(v => c.copy(dailyMinElo = v)),
+    c => promptElo("dailyMaxElo", c.dailyMaxElo)(v => c.copy(dailyMaxElo = v)),
+    c => promptRate("dailyMinScoreRate", c.dailyMinScoreRate)(v => c.copy(dailyMinScoreRate = v)),
+    c => promptRate("dailyMaxScoreRate", c.dailyMaxScoreRate)(v => c.copy(dailyMaxScoreRate = v)),
+    c => promptCount("dailyMinGamesFinished", c.dailyMinGamesFinished)(v => c.copy(dailyMinGamesFinished = v)),
+    c => promptCount("dailyMinTmGamesFinished", c.dailyMinTmGamesFinished)(v => c.copy(dailyMinTmGamesFinished = v)),
+    c => promptRate("dailyMaxTimeoutPercent", c.dailyMaxTimeoutPercent)(v => c.copy(dailyMaxTimeoutPercent = v)),
+    c => promptRate("dailyMaxTmTimeoutPercent", c.dailyMaxTmTimeoutPercent)(v => c.copy(dailyMaxTmTimeoutPercent = v)),
+    c => promptCount("dailyMaxHoursPerMove", c.dailyMaxHoursPerMove)(v => c.copy(dailyMaxHoursPerMove = v)),
+    c => promptCount("dailyMinOngoingGames", c.dailyMinOngoingGames)(v => c.copy(dailyMinOngoingGames = v)),
+    c => promptCount("dailyMaxOngoingGames", c.dailyMaxOngoingGames)(v => c.copy(dailyMaxOngoingGames = v)),
+    c =>
+      promptCount("dailyMinOngoingTeamMatches", c.dailyMinOngoingTeamMatches) { v =>
+        c.copy(dailyMinOngoingTeamMatches = v)
+      }
+  )
 
   private val Ended = "input ended before every setting was answered"
 
   private def prompt(label: String): Task[String] =
     CliPrompt.line(label, Ended)
 
-  /** Asks until the answer parses and `check` finds nothing wrong with the setting it gives, a kept one included: the
-    * second of a min/max pair is checked against the first, which may have changed.
+  /** Asks until the answer parses and, written into the criteria by `fill`, breaks none of the
+    * [[RecruitmentCriteria.Rules]] for `label`, a kept answer included: the max of a min/max pair is judged against the
+    * min, which may have changed. The only prompt that checks them: a rule for a setting asked any other way fails
+    * `TestRecruitmentCriteriaCommand`.
     */
   private def promptOpt[A](
     label: String,
     current: Option[A],
     show: A => String,
     parse: String => Either[String, A],
-    check: Option[A] => Option[String]
-  ): Task[Option[A]] = {
+    fill: Option[A] => RecruitmentCriteria
+  ): Task[RecruitmentCriteria] = {
     val shown = current.fold("none")(show)
     prompt(s"$label [$shown] (Enter=keep, - =none): ").flatMap { typed =>
       val answer = typed match {
@@ -116,50 +89,28 @@ private[cli] object CriteriaPrompts {
         case "-" => Right(None)
         case s   => parse(s).map(Some(_))
       }
-      answer.flatMap(value => check(value).toLeft(value)) match {
-        case Right(value)  => ZIO.succeed(value)
-        case Left(problem) => Console.printLine(s"  $problem") *> promptOpt(label, current, show, parse, check)
+      answer.map(fill).flatMap(answered => answered.problemsAt(label).toLeft(answered)) match {
+        case Right(answered) => ZIO.succeed(answered)
+        case Left(problem)   => Console.printLine(s"  $problem") *> promptOpt(label, current, show, parse, fill)
       }
     }
   }
 
-  /** A day or count setting: a whole number, never below 0. */
-  private def promptCount(label: String, current: Option[Int]): Task[Option[Int]] =
-    promptCountAnd(label, current, _ => None)
+  /** A day or count setting: a whole number. */
+  private def promptCount(label: String, current: Option[Int])(
+    fill: Option[Int] => RecruitmentCriteria
+  ): Task[RecruitmentCriteria] =
+    promptOpt(label, current, _.toString, s => s.toIntOption.toRight(s"'$s' is not an integer"), fill)
 
-  private def promptCountAnd(
-    label: String,
-    current: Option[Int],
-    alsoCheck: Option[Int] => Option[String]
-  ): Task[Option[Int]] =
-    promptOpt(
-      label = label,
-      current = current,
-      show = _.toString,
-      parse = s => s.toIntOption.toRight(s"'$s' is not an integer"),
-      check = value => Check.nonNeg(label, value).orElse(alsoCheck(value))
-    )
+  /** A rate or a percentage. */
+  private def promptRate(label: String, current: Option[Double])(
+    fill: Option[Double] => RecruitmentCriteria
+  ): Task[RecruitmentCriteria] =
+    promptOpt(label, current, _.toString, s => s.toDoubleOption.toRight(s"'$s' is not a number"), fill)
 
-  /** A rate or a percentage, held to `range`. */
-  private def promptRate(
-    label: String,
-    current: Option[Double],
-    range: (String, Option[Double]) => Option[String],
-    alsoCheck: Option[Double] => Option[String]
-  ): Task[Option[Double]] =
-    promptOpt(
-      label = label,
-      current = current,
-      show = _.toString,
-      parse = s => s.toDoubleOption.toRight(s"'$s' is not a number"),
-      check = value => range(label, value).orElse(alsoCheck(value))
-    )
-
-  private def promptOptElo(
-    label: String,
-    current: Option[Elo],
-    check: Option[Elo] => Option[String]
-  ): Task[Option[Elo]] =
+  private def promptElo(label: String, current: Option[Elo])(
+    fill: Option[Elo] => RecruitmentCriteria
+  ): Task[RecruitmentCriteria] =
     promptOpt(
       label = label,
       current = current,
@@ -169,7 +120,7 @@ private[cli] object CriteriaPrompts {
           if (i < 0 || i > Short.MaxValue) Left(s"must be in [0, ${Short.MaxValue}] (got $i)")
           else Right(Elo(i.toShort))
         },
-      check = check
+      fill = fill
     )
 
   // Shown as yes or no, as the recap shows a flag, since that is what it is answered with.

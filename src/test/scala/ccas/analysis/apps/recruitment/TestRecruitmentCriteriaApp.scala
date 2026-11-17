@@ -24,6 +24,7 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
     testSetRejectsInvalid,
     testSetRejectsLongAlias,
     testValidateRejectsBadRanges,
+    testRulesNameSettings,
     testDiffLinesNewAndChanges,
     testCriteriaSpecRoundTrip,
     testLoadFromJsonMissingFile,
@@ -94,6 +95,37 @@ object TestRecruitmentCriteriaApp extends ZIOSpecDefault {
       badRate.validate.isLeft,
       badOngoing.validate.isLeft,
       good.validate.isRight
+    )
+  }
+
+  // A rule is checked at the prompt that asks for its setting, so one whose setting is no field would never be.
+  private def testRulesNameSettings = test("every rule names a setting of the criteria, and validate reports each") {
+    val negative = Some(-1)
+    val breaksEveryRule = makeCriteria().copy(
+      minDaysSinceRegistration = negative,
+      daysSinceLastInvited = negative,
+      daysSinceRejected = negative,
+      maxClubs = negative,
+      avoidAdminMinClubSize = negative,
+      dailyMinGamesFinished = negative,
+      dailyMinTmGamesFinished = negative,
+      dailyMaxHoursPerMove = negative,
+      dailyMinOngoingGames = negative,
+      dailyMaxOngoingGames = Some(-2),
+      dailyMinOngoingTeamMatches = negative,
+      dailyMinScoreRate = Some(2.0),
+      dailyMaxScoreRate = Some(1.5),
+      dailyMaxTimeoutPercent = Some(150.0),
+      dailyMaxTmTimeoutPercent = Some(150.0),
+      dailyMinElo = Some(Elo(2000)),
+      dailyMaxElo = Some(Elo(1000))
+    )
+    val settings = breaksEveryRule.productElementNames.toSet
+    val messages = RecruitmentCriteria.Rules.map(_.check(breaksEveryRule))
+    assertTrue(
+      RecruitmentCriteria.Rules.forall(rule => settings.contains(rule.setting)),
+      messages.forall(_.isDefined),
+      breaksEveryRule.validate == Left(messages.flatten.mkString("; "))
     )
   }
 
