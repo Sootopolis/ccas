@@ -20,6 +20,9 @@ import ccas.server.config.ServerEnvOverlay
 object Main extends ZIOAppDefault {
 
   override def run: ZIO[ZIOAppArgs & Scope, Any, Any] =
+    ZIO.withConsole(StdinConsole)(commandLine)
+
+  private def commandLine: ZIO[ZIOAppArgs, Any, Any] =
     ZIOAppArgs.getArgs.flatMap { args =>
       // zio-cli has no built-in --version (its BuiltInOption is help/wizard/completions only), so handle it here,
       // before reading config — `--version` must work regardless of the config file's state.
