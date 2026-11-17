@@ -4,6 +4,7 @@ import zio.{Console, IO, UIO, ZIO}
 
 /** How every yes/no question reads its answer, wherever it reads it from: Enter takes the default, `y`/`yes` or
   * `n`/`no` answers in any case, and anything else asks again, so a typo neither goes ahead nor quietly declines.
+  * [[askWith]] is the one loop that asks again; every yes/no question goes through it.
   */
 object YesNo {
 
@@ -14,13 +15,25 @@ object YesNo {
 
   /** [[ask]], for a command that treats input ending as something other than a no: `ended` says what it is instead. */
   def askOr[E](question: String, default: Boolean, ended: IO[E, Boolean]): IO[E, Boolean] =
+    askWith(prompt(question, default), default, Console.readLine.option, Console.print(_).orDie, ended)
+
+  /** Writes `shown` and reads answers through `readLine` (`None` once input has ended) until [[read]] finds one,
+    * writing [[AskAgain]] after each that gives none. Input that has ended is whatever `ended` says.
+    */
+  def askWith[E](
+    shown: String,
+    default: Boolean,
+    readLine: IO[E, Option[String]],
+    write: String => IO[E, Unit],
+    ended: IO[E, Boolean]
+  ): IO[E, Boolean] =
     for {
-      _            <- Console.print(prompt(question, default)).orDie
-      answerOption <- Console.readLine.option
+      _            <- write(shown)
+      answerOption <- readLine
       yes <- answerOption.fold(ended) { typed =>
         read(typed, default) match {
           case Some(yes) => ZIO.succeed(yes)
-          case None      => Console.printLine(AskAgain).orDie *> askOr(question, default, ended)
+          case None      => write(AskAgain + "\n") *> askWith(shown, default, readLine, write, ended)
         }
       }
     } yield yes

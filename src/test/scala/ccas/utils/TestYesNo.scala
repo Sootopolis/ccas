@@ -1,6 +1,6 @@
 package ccas.utils
 
-import zio.ZIO
+import zio.{Ref, ZIO}
 import zio.test.{assertTrue, Spec, TestConsole, ZIOSpecDefault}
 
 /** The one rule every yes/no question reads its answer by ([[YesNo]]), and its asking on the console. */
@@ -55,6 +55,20 @@ object TestYesNo extends ZIOSpecDefault {
         !no,
         output.mkString == "Go? [Y/n]   enter y or n\nGo? [Y/n]   enter y or n\nGo? [Y/n] "
       )
+    },
+    test("askWith: writes the prompt it is given, and asks again through the same writer") {
+      for {
+        lines   <- Ref.make(List("yeah", "n"))
+        written <- Ref.make("")
+        no <- YesNo.askWith(
+          shown = "keep? ",
+          default = true,
+          readLine = lines.modify(remaining => (remaining.headOption, remaining.drop(1))),
+          write = text => written.update(_ + text),
+          ended = ZIO.succeed(true)
+        )
+        output <- written.get
+      } yield assertTrue(!no, output == "keep?   enter y or n\nkeep? ")
     },
     test("askOr: input that has ended is what the caller says it is") {
       for {
