@@ -128,6 +128,15 @@ object RecruitmentCandidate {
         .query[Int].run().headOption
     }.someOrFail(new SQLException("COUNT query produced no rows"))
 
+  /** How many of a run's `Deferred` rows are not among `foundIds`: the candidates it holds for the next run. */
+  def selectHeldCountByRun(runId: RecruitmentRunId, foundIds: List[PlayerId]): ZIO[PostgresClient, SQLException, Int] =
+    connectZIO {
+      val deferred: CandidateOutcome = CandidateOutcome.Deferred
+      sql"""SELECT COUNT(*) FROM recruitment_candidate
+            WHERE run_id = $runId AND outcome = $deferred AND player_id <> ALL($foundIds)"""
+        .query[Int].run().headOption
+    }.someOrFail(new SQLException("COUNT query produced no rows"))
+
   def selectRejectionCountsByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, List[RejectionCount]] =
     connectZIO {
       val rejected: CandidateOutcome          = CandidateOutcome.Rejected
@@ -137,13 +146,6 @@ object RecruitmentCandidate {
             GROUP BY rejection_reason, outcome"""
         .query[RejectionCount].run().toList
     }
-
-  def selectDeferredCountByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, Int] =
-    connectZIO {
-      val deferred: CandidateOutcome = CandidateOutcome.Deferred
-      sql"SELECT COUNT(*) FROM recruitment_candidate WHERE run_id = $runId AND outcome = $deferred"
-        .query[Int].run().headOption
-    }.someOrFail(new SQLException("COUNT query produced no rows"))
 
   // The run's still-deferred candidates the operator will confirm, for the interactive `ccas recruit` confirm prompt (a
   // deferred-confirm run leaves everything Deferred; the operator reviews these before any are marked Invited). Capped

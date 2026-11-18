@@ -3,14 +3,15 @@ package ccas.analysis.apps.recruitment
 import java.time.{Instant, YearMonth, ZoneOffset}
 
 import zio.{durationInt, Promise, Schedule, ZLayer}
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
 import ccas.utils.ProgressDisplay
-import ccas.utils.sql.FreshSchemaLayer
+import ccas.utils.client.BodyStore
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
 object TestRecruitmentAppExplore extends ZIOSpecDefault {
 
@@ -202,25 +203,11 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
       // Regression for the 31-vs-30 bug: a chunk overshoot persists more Deferred than target, and the old uncapped
       // confirm flipped ALL of them. Now /found (selectDeferredByRun) and the confirm both cap at the run's stored
       // target, and the excess stays Deferred to carry forward.
-      val source         = ClubSlug("confirm-source")
-      val candidateNames = (0 to 5).map(i => s"confirm-cand-$i").toList
-      val responses = Map(
-        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
-        s"club/$clubSlug/members" -> apiClubMembersJson(Nil),
-        s"club/$source"           -> apiClubJson(ClubId(902).value, source.value),
-        s"club/$source/members" -> apiClubMembersJson(
-          candidateNames.map(n => (n, Times.t0.getEpochSecond))
-        )
-      ) ++ candidateNames.zipWithIndex.map { (name, i) =>
-        s"player/$name" -> apiPlayerJson(410 + i, name)
-      }.toMap
-      val criteria = makeCriteria()
-
       for {
         _         <- seedDb
-        _         <- seedCriteria(criteria)
-        client    <- fakeChessComClient(responses)
-        result    <- runRecruit(client, target = Some(2), sourceClubs = List(source), autoConfirm = false)
+        _         <- seedCriteria(makeCriteria())
+        client    <- fakeChessComClient(overshootResponses)
+        result    <- runRecruit(client, target = Some(2), sourceClubs = List(overshootSource), autoConfirm = false)
         allBefore <- RecruitmentCandidate.selectByRun(result.runId)
         allDeferredBefore = allBefore.filter(_.outcome == CandidateOutcome.Deferred)
         foundBefore <- RecruitmentCandidate.selectDeferredByRun(result.runId)
@@ -233,15 +220,33 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
         allAfter           <- RecruitmentCandidate.selectByRun(result.runId)
         deferredAfter = allAfter.filter(_.outcome == CandidateOutcome.Deferred)
       } yield assertTrue(
-        allDeferredBefore.size == candidateNames.size, // all 6 evaluated, nothing deleted
-        foundBefore.size == 2,                         // /found capped at target
-        firstFlip == 2,                                // confirm flips exactly target
-        invited.size == 2,                             // confirm capped at target
-        secondFlip == 0,                               // re-POST flips nothing (idempotent)
-        invitedAfterRepost.size == 2,                  // still exactly target after re-POST
-        deferredAfter.size == candidateNames.size - 2  // excess (4) carried forward as Deferred
+        allDeferredBefore.size == overshootCandidates.size, // all 6 evaluated, nothing deleted
+        foundBefore.size == 2,                              // /found capped at target
+        firstFlip == 2,                                     // confirm flips exactly target
+        invited.size == 2,                                  // confirm capped at target
+        secondFlip == 0,                                    // re-POST flips nothing (idempotent)
+        invitedAfterRepost.size == 2,                       // still exactly target after re-POST
+        deferredAfter.size == overshootCandidates.size - 2  // excess (4) carried forward as Deferred
       )
     },
+    test("a deferred-confirm run past its target logs its finds and the candidates held for the next run apart") {
+      for {
+        _      <- seedDb
+        _      <- seedCriteria(makeCriteria())
+        client <- fakeChessComClient(overshootResponses)
+        _      <- runRecruit(client, target = Some(2), sourceClubs = List(overshootSource), autoConfirm = false)
+        logged <- ZTestLogger.logOutput.map(_.map(_.message()))
+        // The summary follows the run's header and its duration.
+        summary = logged.dropWhile(_ != s"=== Recruitment Complete: $clubSlug ===").drop(2)
+      } yield assertTrue(
+        summary.take(3) == List(
+          "Candidates evaluated: 6",
+          "Found, not yet invited: 2",
+          "Held for the next run, found past the target: 4"
+        ),
+        !summary.exists(line => line.startsWith("Invited:") || line.startsWith("Deferred:"))
+      )
+    }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default),
     test("deferred candidates from prior run are prioritised in next run") {
       val source = ClubSlug("prio-source")
       // Seed a prior run with a Deferred candidate, then run again
@@ -432,4 +437,16 @@ object TestRecruitmentAppExplore extends ZIOSpecDefault {
       )
     }
   )
+
+  /** Six players who all pass, from one source club, for a run whose target of 2 leaves 4 found past it. */
+  private val overshootSource     = ClubSlug("confirm-source")
+  private val overshootCandidates = (0 to 5).map(i => s"confirm-cand-$i").toList
+  private val overshootResponses = Map(
+    s"club/$clubSlug"                -> apiClubJson(clubId.value, clubSlug.value),
+    s"club/$clubSlug/members"        -> apiClubMembersJson(Nil),
+    s"club/$overshootSource"         -> apiClubJson(ClubId(902).value, overshootSource.value),
+    s"club/$overshootSource/members" -> apiClubMembersJson(overshootCandidates.map(n => (n, Times.t0.getEpochSecond)))
+  ) ++ overshootCandidates.zipWithIndex.map { (name, i) =>
+    s"player/$name" -> apiPlayerJson(410 + i, name)
+  }.toMap
 }

@@ -451,8 +451,8 @@ object RecruitmentApp extends ZIOAppDefault {
             RecruitmentCandidate.updateOutcome(ctx.runId, c.playerId, CandidateOutcome.Invited)
               .filterOrFail(_ == 1)(new SQLException(s"No candidate row in run ${ctx.runId} for ${c.username}"))
           }
-          deferredCount <- RecruitmentCandidate.selectDeferredCountByRun(ctx.runId)
-          rejections    <- RecruitmentCandidate.selectRejectionCountsByRun(ctx.runId)
+          heldCount  <- RecruitmentCandidate.selectHeldCountByRun(ctx.runId, found.map(_.playerId))
+          rejections <- RecruitmentCandidate.selectRejectionCountsByRun(ctx.runId)
           finalRun = RecruitmentRun(
             runId = ctx.runId,
             clubId = clubId,
@@ -465,17 +465,19 @@ object RecruitmentApp extends ZIOAppDefault {
             jobRunIdOption = jobRunIdOption
           )
           _ <- RecruitmentRun.update(finalRun)
-        } yield CommittedRun(finalRun, deferredCount, rejections)
+        } yield CommittedRun(finalRun, heldCount, rejections)
       }
       duration = JDuration.between(startedAt, committed.run.completedAt.get)
       _ <- ZIO.logInfo(s"=== $label: ${ctx.clubSlug} ===")
       _ <- ZIO.logInfo(s"Duration: ${duration.display}")
-      _ <- ZIO.logInfo(s"Candidates evaluated: $evalCount")
-      _ <- ZIO.logInfo(s"Invited: ${confirmed.size}")
-      _ <- ZIO.whenDiscard(found.nonEmpty && confirmed.isEmpty) {
-        ZIO.logInfo(s"Found (not confirmed): ${found.size}")
-      }
-      _ <- ZIO.whenDiscard(committed.deferredCount > 0)(ZIO.logInfo(s"Deferred: ${committed.deferredCount}"))
+      summary = summaryLines(
+        evaluated = evalCount,
+        invited = confirmed.size,
+        unconfirmed = found.size - confirmed.size,
+        held = committed.heldCount,
+        interrupted = interrupted
+      )
+      _ <- ZIO.foreachDiscard(summary)(ZIO.logInfo(_))
       // CLI prompt already displayed candidates; skip redundant listing
       _ <- ZIO.whenDiscard(trigger != RunTrigger.Cli) {
         ZIO.foreachDiscard(confirmed)(c => ZIO.logInfo(s"  ${c.username}"))
@@ -497,8 +499,30 @@ object RecruitmentApp extends ZIOAppDefault {
       }
     } yield committed.run
 
-  /** A finished run as its closing transaction wrote it, with the counts read back in the same transaction. */
-  private case class CommittedRun(run: RecruitmentRun, deferredCount: Int, rejections: List[RejectionCount])
+  /** A run's counts, each passing candidate in one of them: invited, found but not yet invited, or held for the next
+    * run. A run confirms all its finds or none, so beside unconfirmed finds `Invited` could only say 0, and is left out.
+    * An interrupted run's held may include finds cut off mid-check, not past the target, so it gives no reason.
+    */
+  private[recruitment] def summaryLines(
+    evaluated: Int,
+    invited: Int,
+    unconfirmed: Int,
+    held: Int,
+    interrupted: Boolean
+  ): List[String] = {
+    val outcome =
+      if (unconfirmed > 0) { s"Found, not yet invited: $unconfirmed" }
+      else { s"Invited: $invited" }
+    val heldLabel = if (interrupted) { "Held for the next run" }
+    else { "Held for the next run, found past the target" }
+    List(s"Candidates evaluated: $evaluated", outcome) ++ Option.when(held > 0)(s"$heldLabel: $held")
+  }
+
+  /** A finished run as its closing transaction wrote it, with the counts read back in the same transaction.
+    * `heldCount` is the run's `Deferred` rows outside its finds: those trimmed from the finds at the target, and on an
+    * interrupted run any find cut off between its row and the list.
+    */
+  private case class CommittedRun(run: RecruitmentRun, heldCount: Int, rejections: List[RejectionCount])
 
   private def promptConfirmation(found: List[FoundCandidate]): Task[List[FoundCandidate]] =
     for {
