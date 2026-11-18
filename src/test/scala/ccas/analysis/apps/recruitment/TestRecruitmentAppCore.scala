@@ -563,6 +563,33 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         runs == 0
       )
     },
+    test("a run's summary counts each passing candidate once, as invited, found or held") {
+      def lines(invited: Int, unconfirmed: Int, held: Int) =
+        RecruitmentApp.summaryLines(evaluated = 50, invited, unconfirmed, held, interrupted = false)
+      val autoConfirmed = lines(invited = 30, unconfirmed = 0, held = 2)
+      val awaiting      = lines(invited = 0, unconfirmed = 30, held = 2)
+      val noneHeld      = lines(invited = 30, unconfirmed = 0, held = 0)
+      val noneFound     = lines(invited = 0, unconfirmed = 0, held = 0)
+      assertTrue(
+        autoConfirmed ==
+          List("Candidates evaluated: 50", "Invited: 30", "Held for the next run, found past the target: 2"),
+        awaiting ==
+          List(
+            "Candidates evaluated: 50",
+            "Found, not yet invited: 30",
+            "Held for the next run, found past the target: 2"
+          ),
+        noneHeld == List("Candidates evaluated: 50", "Invited: 30"),
+        noneFound == List("Candidates evaluated: 50", "Invited: 0")
+      )
+    },
+    test("an interrupted run's summary holds candidates without saying they were found past the target") {
+      val interrupted =
+        RecruitmentApp.summaryLines(evaluated = 20, invited = 0, unconfirmed = 3, held = 1, interrupted = true)
+      assertTrue(
+        interrupted == List("Candidates evaluated: 20", "Found, not yet invited: 3", "Held for the next run: 1")
+      )
+    },
     test("a run's summary names its club") {
       for {
         _      <- seedDb
