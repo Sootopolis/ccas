@@ -155,6 +155,17 @@ object RecruitmentTestSupport {
 
   val emptyCurrentGamesJson: String = """{"games": []}"""
 
+  /** `username`'s current daily games: `total` of them, the first `teamMatches` in a team match. */
+  def currentGamesJson(username: String, total: Int, teamMatches: Int): String = {
+    val games = (1 to total).map { n =>
+      val matchField = if (n <= teamMatches) s""", "match": "https://api.chess.com/pub/match/$n"""" else ""
+      s"""{"white": "https://api.chess.com/pub/player/$username", "black": "https://api.chess.com/pub/player/opponent",
+         | "url": "https://www.chess.com/game/daily/$n", "fen": "", "pgn": "", "move_by": 0, "last_activity": 0,
+         | "start_time": 0, "time_control": "1/86400", "rated": true$matchField}""".stripMargin
+    }
+    s"""{"games": [${games.mkString(",")}]}"""
+  }
+
   val emptyArchiveJson: String = """{"games": []}"""
 
   def archiveGameJson(

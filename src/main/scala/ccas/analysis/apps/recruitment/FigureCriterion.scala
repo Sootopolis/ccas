@@ -7,7 +7,7 @@ import RecruitmentStatsHelpers.StatsWindowDays
 
 import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
 
-private[recruitment] final case class CacheCheck(
+private[recruitment] final case class FigureCheck(
   cache: PlayerRecruitmentCache,
   criteria: RecruitmentCriteria,
   now: Instant
@@ -27,121 +27,156 @@ private val FigureStalenessDays = 30L
 private[recruitment] def figuresFresh(cache: PlayerRecruitmentCache, now: Instant): Boolean =
   FigureStalenessDays > cacheRowAgeDays(cache, now)
 
-/** A check that can reject from cached figures alone. It records its live check's `reason`, except for the two
-  * zero-tolerance timeouts, which judge a timeout's date where no live check does.
+/** The filter that fetches a group of figures, writes them to the row and judges them there. */
+private[recruitment] enum FigureSource {
+  case Clubs, DailyStats, OngoingGames, TmStats
+}
+
+/** A check on a row's figures, defined once: the filter named by `liveIn` judges the row it has just written, and
+  * [[RecruitmentFilterDefs.CheckCacheCriteria]] judges a stored row while it is younger than `stalenessDays` (#477).
+  * The two zero-tolerance timeouts judge a timeout's date, which no live check does, so they run from cache alone.
   */
-private[recruitment] enum CacheCriterion(
+private[recruitment] enum FigureCriterion(
   val reason: RejectionReason,
+  private val liveIn: Option[FigureSource],
   private val stalenessDays: Long,
-  private val shouldReject: CacheCheck => Boolean
+  private val shouldReject: FigureCheck => Boolean
 ) {
 
   // These two go by the timeout's own age: the row keeps one after it leaves the window a full evaluation counts. A fresh
   // row keeps its date when a timeout is merged in (#429), so the row's age can close one still inside the window. The
   // rate criteria below also apply at a limit of 0, and by the row's age.
   case ZeroToleranceDailyTimeout
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.RecentDailyTimeout,
+        liveIn = None,
         stalenessDays = StatsWindowDays,
         shouldReject = in =>
           in.criteria.dailyMaxTimeoutPercent.contains(0.0) && in.timeoutInWindow(in.cache.lastDailyTimeoutAt)
       )
 
   case ZeroToleranceTmTimeout
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.RecentTmTimeout,
+        liveIn = None,
         stalenessDays = StatsWindowDays,
         shouldReject = in =>
           in.criteria.dailyMaxTmTimeoutPercent.contains(0.0) && in.timeoutInWindow(in.cache.lastTmTimeoutAt)
       )
 
   case MaxClubs
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.MaxClubs,
+        liveIn = Some(FigureSource.Clubs),
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.maxClubs.exists(max => in.cache.clubCount.exists(_ > max))
       )
 
   case MinDailyElo
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMinElo,
+        liveIn = Some(FigureSource.DailyStats),
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMinElo.exists(min => in.cache.dailyElo.exists(_.value < min.value))
       )
 
   case MaxDailyElo
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMaxElo,
+        liveIn = Some(FigureSource.DailyStats),
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMaxElo.exists(max => in.cache.dailyElo.exists(_.value > max.value))
       )
 
   case MinDailyScoreRate
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMinScoreRate,
+        liveIn = Some(FigureSource.DailyStats),
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMinScoreRate.exists(min => in.cache.dailyScoreRate.exists(_ < min))
       )
 
   case MaxDailyScoreRate
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMaxScoreRate,
+        liveIn = Some(FigureSource.DailyStats),
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMaxScoreRate.exists(max => in.cache.dailyScoreRate.exists(_ > max))
       )
 
   case MaxDailyTimeoutPercent
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMaxTimeoutPercent,
+        liveIn = Some(FigureSource.DailyStats),
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMaxTimeoutPercent.exists(max => in.cache.dailyTimeoutPct.exists(_ > max))
       )
 
   case MinDailyGamesFinished
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMinGamesFinished,
+        liveIn = Some(FigureSource.DailyStats),
         stalenessDays = FigureStalenessDays,
         shouldReject = in =>
           in.criteria.dailyMinGamesFinished.exists(min => in.cache.dailyGamesFinished.exists(_ < min))
       )
 
   case MinOngoingGames
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMinOngoingGames,
+        liveIn = Some(FigureSource.OngoingGames),
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMinOngoingGames.exists(min => in.cache.ongoingGames.exists(_ < min))
       )
 
   case MaxOngoingGames
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMaxOngoingGames,
+        liveIn = Some(FigureSource.OngoingGames),
         stalenessDays = FigureStalenessDays,
         shouldReject = in => in.criteria.dailyMaxOngoingGames.exists(max => in.cache.ongoingGames.exists(_ > max))
       )
 
   case MinOngoingTeamMatches
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMinOngoingTeamMatches,
+        liveIn = Some(FigureSource.OngoingGames),
         stalenessDays = FigureStalenessDays,
         shouldReject = in =>
           in.criteria.dailyMinOngoingTeamMatches.exists(min => in.cache.ongoingTeamMatches.exists(_ < min))
       )
 
   case MinTmGamesFinished
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMinTmGamesFinished,
+        liveIn = Some(FigureSource.TmStats),
         stalenessDays = FigureStalenessDays,
         shouldReject = in =>
           in.criteria.dailyMinTmGamesFinished.exists(min => in.cache.tmGamesFinished90d.exists(_ < min))
       )
 
   case MaxTmTimeoutPercent
-      extends CacheCriterion(
+      extends FigureCriterion(
         reason = RejectionReason.DailyMaxTmTimeoutPercent,
+        liveIn = Some(FigureSource.TmStats),
         stalenessDays = FigureStalenessDays,
         shouldReject = in =>
           in.criteria.dailyMaxTmTimeoutPercent.exists(max => in.cache.tmTimeoutPct90d.exists(_ > max))
       )
 
-  def fires(in: CacheCheck): Boolean = stalenessDays > in.rowAgeDays && shouldReject(in)
+  def judgedLiveBy(source: FigureSource): Boolean = liveIn.contains(source)
+
+  def rejectsFromCache(in: FigureCheck): Boolean = stalenessDays > in.rowAgeDays && shouldReject(in)
+}
+
+private[recruitment] object FigureCriterion {
+
+  /** The first criterion `source` judges that the row it has just written fails, whatever the row's age: its figures
+    * were fetched just now. The filter's checks on figures no row keeps come after these.
+    */
+  def firstLive(source: FigureSource, in: FigureCheck): Option[RejectionReason] =
+    values.find(criterion => criterion.judgedLiveBy(source) && criterion.shouldReject(in)).map(_.reason)
+
+  def firstFromCache(in: FigureCheck): Option[RejectionReason] =
+    values.find(_.rejectsFromCache(in)).map(_.reason)
 }

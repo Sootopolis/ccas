@@ -20,6 +20,7 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestRecruitmentEvaluation")(
     suiteEvaluateCandidates,
     suiteCacheFilters,
+    suiteLiveAndCached,
     suiteTmTimeouts
   ).provideShared(
     FreshSchemaLayer(schema = "test_recruitment_evaluation", onInit = Tables.ensureTables),
@@ -540,6 +541,119 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       cache      <- PlayerRecruitmentCache.selectId(playerId)
     } yield (candidates.headOption.map(recordedOf), cache)
   }
+
+  // ==========================================================================
+  // Suite: One definition, live and cached (#477)
+  // ==========================================================================
+
+  /** Criteria that set one limit, and responses that put alice's figure past it, built when the row's test runs so an
+    * archive window matches the run's clock.
+    */
+  private case class LiveAndCachedRow(
+    entry: FigureCriterion,
+    criteria: RecruitmentCriteria,
+    responses: () => Map[String, String]
+  )
+
+  private def suiteLiveAndCached = suite("one definition, live and cached")(
+    (testEveryLiveCriterionHasARow :: liveAndCachedRows.map(testLiveThenCached))*
+  )
+
+  private def testEveryLiveCriterionHasARow =
+    test("every criterion judged live has a row in the live-and-cached table") {
+      val judgedLive =
+        FigureCriterion.values.toList.filter(criterion => FigureSource.values.exists(criterion.judgedLiveBy))
+      assertTrue(judgedLive.diff(liveAndCachedRows.map(_.entry)).isEmpty)
+    }
+
+  private def testLiveThenCached(row: LiveAndCachedRow) = {
+    val reason = row.entry.reason
+    test(
+      s"${row.entry}: a fresh figure past the limit rejects for ${reason.label}, " +
+        "and the row it writes rejects from cache for the same reason"
+    ) {
+      val responses = row.responses()
+      for {
+        _      <- seedDb
+        first  <- evaluateOnce(responses, row.criteria)
+        second <- evaluateOnce(responses, row.criteria)
+      } yield assertTrue(first.contains(rejectedFor(reason)), second.contains(rejectedFromCacheFor(reason)))
+    }
+  }
+
+  private def aliceWith(responses: (String, String)*): Map[String, String] =
+    Map("player/alice" -> apiPlayerJson(200, "alice")) ++ responses
+
+  private def aliceStats(json: String): Map[String, String] = aliceWith("player/alice/stats" -> json)
+
+  private def aliceCurrentGames(total: Int, teamMatches: Int): Map[String, String] =
+    aliceWith("player/alice/games" -> currentGamesJson("alice", total, teamMatches))
+
+  // Without a route of its own, a figure comes from the fake client's empty default: no games, current or archived.
+  private def liveAndCachedRows: List[LiveAndCachedRow] = List(
+    LiveAndCachedRow(
+      entry = FigureCriterion.MaxClubs,
+      criteria = makeCriteria().copy(maxClubs = Some(1)),
+      responses = () => aliceWith("player/alice/clubs" -> apiPlayerClubsJson(List("club-a", "club-b")))
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MinDailyElo,
+      criteria = makeCriteria().copy(dailyMinElo = Some(Elo(1000))),
+      responses = () => aliceStats(apiPlayerStatsJson(dailyElo = 999))
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MaxDailyElo,
+      criteria = makeCriteria().copy(dailyMaxElo = Some(Elo(2000))),
+      responses = () => aliceStats(apiPlayerStatsJson(dailyElo = 2001))
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MinDailyScoreRate,
+      criteria = makeCriteria().copy(dailyMinScoreRate = Some(0.5)),
+      responses = () => aliceStats(apiPlayerStatsJson(wins = 0, losses = 10, draws = 0))
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MaxDailyScoreRate,
+      criteria = makeCriteria().copy(dailyMaxScoreRate = Some(0.8)),
+      responses = () => aliceStats(apiPlayerStatsJson(wins = 10, losses = 0, draws = 0))
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MaxDailyTimeoutPercent,
+      criteria = makeCriteria().copy(dailyMaxTimeoutPercent = Some(10.0)),
+      responses = () => aliceStats(apiPlayerStatsJson(timeoutPct = 15.0))
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MinDailyGamesFinished,
+      criteria = makeCriteria().copy(dailyMinGamesFinished = Some(1)),
+      responses = () => aliceWith()
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MinOngoingGames,
+      criteria = makeCriteria().copy(dailyMinOngoingGames = Some(1)),
+      responses = () => aliceWith()
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MaxOngoingGames,
+      criteria = makeCriteria().copy(dailyMaxOngoingGames = Some(2)),
+      responses = () => aliceCurrentGames(total = 3, teamMatches = 0)
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MinOngoingTeamMatches,
+      criteria = makeCriteria().copy(dailyMinOngoingTeamMatches = Some(1)),
+      responses = () => aliceCurrentGames(total = 1, teamMatches = 0)
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MinTmGamesFinished,
+      criteria = makeCriteria().copy(dailyMinTmGamesFinished = Some(1)),
+      responses = () => aliceWith()
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.MaxTmTimeoutPercent,
+      criteria = makeCriteria().copy(dailyMaxTmTimeoutPercent = Some(10.0)),
+      responses = () =>
+        aliceWith() ++
+          archivesInWindow("alice", Instant.now(), archiveJson(List(tmGame("alice", "timeout", "win"))))
+    )
+  )
 
   private def suiteTmTimeouts = suite("team-match timeouts")(
     testTmTimeoutRejectsWhenOverallRateReadsZero,
