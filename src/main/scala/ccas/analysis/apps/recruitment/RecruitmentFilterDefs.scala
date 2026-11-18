@@ -50,6 +50,14 @@ private[recruitment] object RecruitmentFilterDefs {
     update(base)
   }
 
+  // Judges the row [[writeFigures]] returned, so the figure a filter rejects on is the one the cache keeps (#477).
+  private def judgeLive(
+    env: FilterEnv,
+    source: FigureSource,
+    written: PlayerRecruitmentCache
+  ): Option[RejectionReason] =
+    FigureCriterion.firstLive(source, FigureCheck(written, env.run.criteria, env.run.now))
+
   // --- Filter implementations ---
 
   object FetchAndCheckPlayer extends RecruitmentFilter {
@@ -133,8 +141,7 @@ private[recruitment] object RecruitmentFilterDefs {
     def apply(env: FilterEnv): RIO[PostgresClient, FilterResult] =
       ZIO.succeed {
         val rejectionOption = env.candidate.cacheOption.flatMap { cache =>
-          val check = CacheCheck(cache, env.run.criteria, env.run.now)
-          CacheCriterion.values.find(_.fires(check)).map(_.reason)
+          FigureCriterion.firstFromCache(FigureCheck(cache, env.run.criteria, env.run.now))
         }
         FilterResult(rejectionOption, env.candidate)
       }
@@ -167,12 +174,9 @@ private[recruitment] object RecruitmentFilterDefs {
         (username, playerClubs) <- fetchRecovering(env, apiPlayer.playerId)(fetch)
         clubNames = playerClubs.clubs.map(_.clubName).toSet
       } yield {
-        val clubCount = playerClubs.clubs.size
-        val criteria  = env.run.criteria
-        val rejectionOption =
-          if (criteria.maxClubs.exists(clubCount > _)) Some(MaxClubs)
-          else Option.when(env.run.excludedSlugs.exists(clubNames.contains))(ExcludeClubs)
-        val updatedCache = writeFigures(env, apiPlayer.playerId)(_.copy(clubCount = Some(clubCount)))
+        val updatedCache = writeFigures(env, apiPlayer.playerId)(_.copy(clubCount = Some(playerClubs.clubs.size)))
+        val rejectionOption = judgeLive(env, FigureSource.Clubs, updatedCache)
+          .orElse(Option.when(env.run.excludedSlugs.exists(clubNames.contains))(ExcludeClubs))
         FilterResult(
           rejectionOption = rejectionOption,
           candidate = env.candidate.copy(
@@ -354,26 +358,18 @@ private[recruitment] object RecruitmentFilterDefs {
           b = env.candidate.cacheOption.flatMap(_.lastDailyTimeoutAt)
         )
         val dailyTimePerMove = dailyStats.record.timePerMove
-        val criteria         = env.run.criteria
-        val gamesFinished    = dailyGamesFinished90d.getOrElse(dailyGamesFinished)
-        val slowMoves        = criteria.dailyMaxHoursPerMove.exists(hours => dailyTimePerMove > hours * 3600)
-        val rejectionOption =
-          if (criteria.dailyMinElo.exists(min => dailyElo.value < min.value)) Some(DailyMinElo)
-          else if (criteria.dailyMaxElo.exists(max => dailyElo.value > max.value)) Some(DailyMaxElo)
-          else if (criteria.dailyMinScoreRate.exists(dailyStats.record.scoreRate < _)) Some(DailyMinScoreRate)
-          else if (criteria.dailyMaxScoreRate.exists(dailyStats.record.scoreRate > _)) Some(DailyMaxScoreRate)
-          else if (criteria.dailyMaxTimeoutPercent.exists(dailyTimeoutPct > _)) Some(DailyMaxTimeoutPercent)
-          else if (criteria.dailyMinGamesFinished.exists(gamesFinished < _)) Some(DailyMinGamesFinished)
-          else Option.when(slowMoves)(DailyMaxHoursPerMove)
+        val slowMoves        = env.run.criteria.dailyMaxHoursPerMove.exists(hours => dailyTimePerMove > hours * 3600)
         val updatedCache = writeFigures(env, apiPlayer.playerId) {
           _.copy(
             dailyElo = Some(dailyElo),
             dailyTimeoutPct = Some(dailyTimeoutPct),
-            dailyGamesFinished = Some(gamesFinished),
+            dailyGamesFinished = Some(dailyGamesFinished90d.getOrElse(dailyGamesFinished)),
             lastDailyTimeoutAt = mergedDailyTimeout,
             dailyScoreRate = Some(dailyStats.record.scoreRate)
           )
         }
+        val rejectionOption = judgeLive(env, FigureSource.DailyStats, updatedCache)
+          .orElse(Option.when(slowMoves)(DailyMaxHoursPerMove))
         FilterResult(
           rejectionOption,
           env.candidate.copy(cacheOption = Some(updatedCache), recentArchivesOption = archives)
@@ -392,15 +388,10 @@ private[recruitment] object RecruitmentFilterDefs {
       } yield {
         val ongoingGames       = currentGames.games.size
         val ongoingTeamMatches = currentGames.games.count(_.`match`.isDefined)
-        val criteria           = env.run.criteria
-        val fewTeamMatches     = criteria.dailyMinOngoingTeamMatches.exists(ongoingTeamMatches < _)
-        val rejectionOption =
-          if (criteria.dailyMinOngoingGames.exists(ongoingGames < _)) Some(DailyMinOngoingGames)
-          else if (criteria.dailyMaxOngoingGames.exists(ongoingGames > _)) Some(DailyMaxOngoingGames)
-          else Option.when(fewTeamMatches)(DailyMinOngoingTeamMatches)
         val updatedCache = writeFigures(env, apiPlayer.playerId)(
           _.copy(ongoingGames = Some(ongoingGames), ongoingTeamMatches = Some(ongoingTeamMatches))
         )
+        val rejectionOption = judgeLive(env, FigureSource.OngoingGames, updatedCache)
         FilterResult(rejectionOption, env.candidate.copy(username = username, cacheOption = Some(updatedCache)))
       }
     }
@@ -427,13 +418,8 @@ private[recruitment] object RecruitmentFilterDefs {
             lastTmTimeoutAt = mergeOptionalInstants(tmStats.lastTimeoutAt, cache.lastTmTimeoutAt)
           )
         }
-        val criteria   = env.run.criteria
-        val tmTimeouts = criteria.dailyMaxTmTimeoutPercent.exists(max => tmStats.timeoutPct.exists(_ > max))
-        val rejectionOption =
-          if (criteria.dailyMinTmGamesFinished.exists(tmStats.gamesFinished < _)) Some(DailyMinTmGamesFinished)
-          else Option.when(tmTimeouts)(DailyMaxTmTimeoutPercent)
         val candidate = env.candidate.copy(username = tmStats.username, cacheOption = Some(updatedCache))
-        FilterResult(rejectionOption, candidate)
+        FilterResult(judgeLive(env, FigureSource.TmStats, updatedCache), candidate)
       }
   }
 }

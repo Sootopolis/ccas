@@ -53,19 +53,14 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     testAcceptsPlayerNotInNationalityExcludeList,
     testRejectsByNationalityIncludeModeWhenNotInList,
     testAcceptsPlayerInNationalityIncludeList,
-    testRejectsByDailyMinElo,
-    testRejectsByDailyMaxElo,
     testAcceptsPlayerWithinEloRange,
-    testRejectsByDailyMaxTimeoutPercent,
     testFirstFailingCriterionIsRecorded,
-    testRejectsByDailyMinGamesFinished,
     testDailyMinGamesFinishedCountsTeamMatchGames,
     testDailyMinGamesFinishedExcludesNonDailyGames,
     testArchiveFetchFailureRecordedInApiFetchFailure,
     testExtractLastDailyTimeoutIgnoresNonDailyGames,
     testRejectsByDailyMaxHoursPerMove,
     testAcceptsPlayerWithinDailyMaxHoursPerMove,
-    testRejectsByMaxClubs,
     testRejectsByExcludeClubs,
     testRejectsWhenPlayerHasMatchAgainstTargetClub,
     testAcceptsWhenPlayerMatchesDontOverlapTargetClub,
@@ -152,28 +147,6 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     for { recorded <- evalSingle(responses, criteria) } yield assertTrue(recorded.contains(passed))
   }
 
-  private def testRejectsByDailyMinElo = test("rejects by dailyMinElo") {
-    val responses = Map(
-      "player/alice"       -> apiPlayerJson(200, "alice"),
-      "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 800)
-    )
-    val criteria = makeCriteria().copy(dailyMinElo = Some(Elo(1000)))
-    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
-      recorded.contains(rejectedFor(RejectionReason.DailyMinElo))
-    )
-  }
-
-  private def testRejectsByDailyMaxElo = test("rejects by dailyMaxElo") {
-    val responses = Map(
-      "player/alice"       -> apiPlayerJson(200, "alice"),
-      "player/alice/stats" -> apiPlayerStatsJson(dailyElo = 2200)
-    )
-    val criteria = makeCriteria().copy(dailyMaxElo = Some(Elo(2000)))
-    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
-      recorded.contains(rejectedFor(RejectionReason.DailyMaxElo))
-    )
-  }
-
   private def testAcceptsPlayerWithinEloRange = test("accepts player within Elo range") {
     val responses = Map(
       "player/alice"       -> apiPlayerJson(200, "alice"),
@@ -181,17 +154,6 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     )
     val criteria = makeCriteria().copy(dailyMinElo = Some(Elo(1000)), dailyMaxElo = Some(Elo(2000)))
     for { recorded <- evalSingle(responses, criteria) } yield assertTrue(recorded.contains(passed))
-  }
-
-  private def testRejectsByDailyMaxTimeoutPercent = test("rejects by dailyMaxTimeoutPercent") {
-    val responses = Map(
-      "player/alice"       -> apiPlayerJson(200, "alice"),
-      "player/alice/stats" -> apiPlayerStatsJson(timeoutPct = 15.0)
-    )
-    val criteria = makeCriteria().copy(dailyMaxTimeoutPercent = Some(10.0))
-    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
-      recorded.contains(rejectedFor(RejectionReason.DailyMaxTimeoutPercent))
-    )
   }
 
   private def testFirstFailingCriterionIsRecorded =
@@ -205,17 +167,6 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
         recorded <- evalSingle(responses, criteria)
       } yield assertTrue(recorded.contains(rejectedFor(RejectionReason.DailyMinElo)))
     }
-
-  private def testRejectsByDailyMinGamesFinished = test("rejects by dailyMinGamesFinished") {
-    val responses = Map(
-      "player/alice"       -> apiPlayerJson(200, "alice"),
-      "player/alice/stats" -> apiPlayerStatsJson(wins = 5, losses = 3, draws = 2) // 10 games
-    )
-    val criteria = makeCriteria().copy(dailyMinGamesFinished = Some(50))
-    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
-      recorded.contains(rejectedFor(RejectionReason.DailyMinGamesFinished))
-    )
-  }
 
   private def testDailyMinGamesFinishedCountsTeamMatchGames =
     test("dailyMinGamesFinished counts team match games from archives") {
@@ -358,17 +309,6 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     )
     val criteria = makeCriteria().copy(dailyMaxHoursPerMove = Some(12))
     for { recorded <- evalSingle(responses, criteria) } yield assertTrue(recorded.contains(passed))
-  }
-
-  private def testRejectsByMaxClubs = test("rejects by maxClubs") {
-    val responses = Map(
-      "player/alice"       -> apiPlayerJson(200, "alice"),
-      "player/alice/clubs" -> apiPlayerClubsJson(List("club-1", "club-2", "club-3", "club-4", "club-5", "club-6"))
-    )
-    val criteria = makeCriteria().copy(maxClubs = Some(5))
-    for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
-      recorded.contains(rejectedFor(RejectionReason.MaxClubs))
-    )
   }
 
   private def testRejectsByExcludeClubs = test("rejects by excludeClubs") {

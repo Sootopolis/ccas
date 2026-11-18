@@ -130,7 +130,7 @@ object CriteriaRecap {
       decimal("dailyMinScoreRate", criteria.dailyMinScoreRate, "daily score rate at least this, draws counting half"),
       decimal("dailyMaxScoreRate", criteria.dailyMaxScoreRate, "daily score rate at most this, draws counting half"),
       whole("dailyMinGamesFinished", criteria.dailyMinGamesFinished, s"at least this many daily games ended $window"),
-      // At 0 the cached zero-tolerance check also applies, to a timeout of our own record (`CacheCriterion`).
+      // At 0 the cached zero-tolerance check also applies, to a timeout of our own record (`FigureCriterion`).
       decimal(
         "dailyMaxTimeoutPercent",
         criteria.dailyMaxTimeoutPercent,
