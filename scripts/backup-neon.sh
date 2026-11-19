@@ -10,7 +10,7 @@
 # Connection: the server's own settings, read the way the server reads them, so
 # the dump is of the database the server uses. No backup-specific secrets.
 #
-# Restoring a dump: see README.md, section Backups.
+# Restoring a dump: see docs/neon.md, section Restoring.
 #
 set -euo pipefail
 
