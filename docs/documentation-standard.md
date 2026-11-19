@@ -14,6 +14,8 @@ Route by the question the reader is asking. Every fact has exactly one home; eve
 | Why is *this line* strange? | `//` at the line | the line changes |
 | Why did we pick X over Y? | `docs/adr/NNNN-slug.md` | never — but see currency, below |
 | How do I install / run / configure it? | `README.md` | the feature changes |
+| How do I run it on Neon, and back it up? | `docs/neon.md` | Neon or the pool changes |
+| How do I set up a clone to work on the code? | `CONTRIBUTING.md` | the toolchain changes |
 | What does this behaviour guarantee? | the test name and its assertions | the behaviour changes |
 | What must a contributor or agent never do here? | `CLAUDE.md` | rarely |
 | What must they never do in this kind of file? | `.claude/rules/<topic>.md`, scoped by its `paths:` header | the files it covers move |
@@ -21,7 +23,7 @@ Route by the question the reader is asking. Every fact has exactly one home; eve
 | How does Chess.com's API actually behave? | [`docs/chess-com-api.md`](chess-com-api.md) | Chess.com changes, or an observation proves wrong |
 | What is the exact value of a version / default / limit? | the code that defines it | — |
 
-The framework behind the split is [Diátaxis](https://diataxis.fr/): reference (scaladoc, README's API section), how-to (README's task sections), and explanation (ADRs) are different genres with different lifetimes, and mixing them is what makes a document unmaintainable. Decision records use [Nygard's lightweight ADR format](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions).
+The framework behind the split is [Diátaxis](https://diataxis.fr/): reference (scaladoc, `docs/architecture.md`), how-to (README's task sections, `docs/neon.md`, `CONTRIBUTING.md`), and explanation (ADRs) are different genres with different lifetimes, and mixing them is what makes a document unmaintainable. Decision records use [Nygard's lightweight ADR format](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions).
 
 A rule belongs in `.claude/rules/` rather than `CLAUDE.md` only when it matters solely while a file it covers is open, because Claude Code loads it only when Claude reads, writes or edits such a file ([path-specific rules](https://code.claude.com/docs/en/memory#path-specific-rules)). A rule needed at design time, such as no `ChessComClient` call inside `withTransaction`, or for a command run alone, such as never committing on `wip`, stays in `CLAUDE.md`.
 

@@ -58,7 +58,7 @@ A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_
 
 ### Routes
 
-- `HealthRoutes` — health and readiness.
+- `HealthRoutes` — `GET /health` (liveness) and `GET /health/ready`: 200 or 503 on whether the database answers, with body `{"database": "<host>[:port]/<db>"}` and no credentials.
 - `JobRoutes` — submit, query and cancel jobs, plus recruitment-result delivery: `GET /api/jobs/{jobId}/recruitment/invited` (paste-ready invited usernames), `GET .../recruitment/found` (still-`Deferred` candidates), `POST .../recruitment/confirm` (flips that run's `Deferred` candidates to `Invited` in one transaction, returning `ConfirmResult{marked, usernames}`), and `GET /api/recruitment/latest/invited` (for a club) + `GET /api/recruitment/runs/{runId}/invited` for reporting a past run. These drive `ccas recruit`'s `--stdout`, interactive-confirm and `--report` modes; an interactive scout sends `autoConfirm=false`, so candidates stay `Deferred` until the operator confirms.
 - `ScheduleRoutes` — CRUD for scheduled jobs.
 - `BlacklistRoutes` — synchronous CRUD for `RecruitmentBlacklist`, delegating to `BlacklistApp`.
@@ -66,7 +66,7 @@ A "set" is a **versioned insert**. Criteria rows are immutable and `recruitment_
 - `ManagedClubRoutes` — synchronous CRUD for the managed-club marker, delegating to `ManagedClubApp`.
 - `ClubRoutes` — `GET /api/clubs`, the named clubs the CLI's completion cache reads, and `GET /api/clubs/resolve`, which club a query names without acting on it (`ccas club show`, and `use-club`'s check).
 
-Every route that names a club reads it as a `ClubQuery` — in a JSON body, or as exactly one of `?clubId=` / `?slug=` in a URL — and resolves it through `ClubRequest` the way a job submit does, so a former name reaches its club on every route. A synchronous route answers with a `ClubResult`: the resolution, plus its result only when the resolution found a club to act on.
+Every route that names a club reads it as a `ClubQuery` — in a JSON body as `{"kind": "by_id", "clubId": 123}` or `{"kind": "by_slug", "slug": "team-alpha"}`, or as exactly one of `?clubId=` / `?slug=` in a URL — and resolves it through `ClubRequest` the way a job submit does, so a former name reaches its club on every route. A synchronous route answers with a `ClubResult`: the resolution, plus its result only when the resolution found a club to act on.
 
 Route handlers use inline JSON codecs. User-facing errors form a sealed `UserFacingError` trait (`ccas.utils.errors`) carrying the HTTP status and a pre-encoded JSON body (default `{"error": "<message>"}`, with `.of[B: JsonEncoder](body, msg)` for structured payloads). Each route table turns its handlers' failures into responses through `RouteHelpers.renderError`. An error raised inside a streaming body (`/logs`, `/progress`) arrives after the response has started, so it ends the stream instead.
 

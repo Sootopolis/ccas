@@ -25,31 +25,11 @@ docker compose up -d
 # Configure environment
 cp .env.example .env   # edit with your values
 
-# Enable the tracked git hooks (pre-push runs the docs check and `sbt lint`, then the full test suite)
-git config core.hooksPath .githooks
-
-# Have git blame skip the commits that only reformatted the tree
-git config blame.ignoreRevsFile .git-blame-ignore-revs
-
-# Run the server (default port 8080)
+# Run the server
 sbt "runMain ccas.cli.Main server up"
-
-# Run tests (requires ccas_test database from docker compose)
-sbt test
-
-# After a deliberate change to a report's wording, rewrite its snapshots from the failed run, then read their diff
-sbt snapshot4sPromote
-
-# Check formatting (scalafmt) and the coding conventions (scalafix), as CI does
-sbt lint
-
-# Apply both tools' fixes
-sbt lintFix
 ```
 
-`core.hooksPath` and `blame.ignoreRevsFile` are per-clone and not carried by `git clone`, so set them once on every machine you work from — otherwise pushes skip the pre-push test run silently, and `git blame` credits every reformatted line to the reformat.
-
-In IntelliJ, set the Scala code style's formatter to Scalafmt (Settings → Editor → Code Style → Scala), so that Reformat Code runs scalafmt with `.scalafmt.conf`. Optimize Imports is IntelliJ's own and may order imports differently; `sbt lint` catches any it leaves.
+To work on the code — hooks, tests, lint — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Install the `ccas` CLI
 
@@ -145,8 +125,6 @@ Every boot (`ccas server up`, detached or not, and `ccas-server`) asks `Boot aga
 
 The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas-<port>.pid` and its stdout/stderr to `<log_dir>/server-<port>.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). Both are named by the port, so two servers on one machine (one per worktree, say, each with its own `SERVER_PORT` and database) keep apart, and `status` and `down` act only on the server at this shell's port unless given `--port <n>`. `ccas server list` reads every pid file and probes every port at once, so a slow database delays the list by one probe's timeout, not one per server. It also lists this shell's port when a server answers there without a pid file, which is how a foreground server there shows; one on another port writes no pid file and isn't listed. With nothing to list, it prints no rows and says so on stderr. It only reads, leaving a stale pid file in place: `ccas server down --port <n>` clears it. Job logs are not named by the port: by default every server on the machine, whatever directory it was started from, writes them to `${XDG_STATE_HOME:-~/.local/state}/ccas/job-logs`. Give one of two such servers its own `JOB_LOGS_DIR` when their databases' `job_log_retention_days` differ, since each server's sweep applies its own window to every log there. Reports, which the apps' own mains write (and a server only for a History job it stops midway), go to `${XDG_DATA_HOME:-~/.local/share}/ccas/output` by default, and `CCAS_OUTPUT_DIR` moves them; runs against two databases that share a club otherwise archive each other's reports ([ADR 0024](docs/adr/0024-one-directory-per-machine.md)). `ccas server up --detach` refuses a port where a server already answers: `already running on 127.0.0.1:<port>, pid=<n>` for one it started, and a note to stop it first for one it didn't. It also refuses a port the server couldn't listen on, saying why. It waits 30s for the server to report ready before giving up and stopping it — raise that with `--ready-timeout-seconds <n>` or the config file's `ready_timeout_seconds` when the database is slow to wake (a suspended serverless compute can take longer than the default). For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
 
-> **Two gotchas.** The parser (zio-cli) expects options **before** positional arguments — `ccas blacklist add --club team-alpha alice bob`, not `… alice bob --club team-alpha` (a misplaced flag is silently swallowed as a username). And the staged binary reads configuration from the **process environment only** — it does not load `.env` (that is auto-sourced for `sbt run` / `sbt runMain`).
-
 ### Shell completion
 
 `ccas completion <bash|zsh|fish>` prints a self-contained, **pure-shell** completion script. It boots the JVM once when you install it; afterwards every `<TAB>` runs entirely in the shell (no JVM, no network), so completion is instant. The scripts complete subcommands and flags, plus **club slugs** (after `--club`, and for the `ccas use-club` argument) and **recent job ids** (for `ccas logs` and `ccas cancel`) read from cache files, and the **settings `ccas config` knows**, with the values of those that take a fixed set (`ccas config set CCAS_BODY_STORE_BACKEND <TAB>` offers `fs s3`), and **file paths** after `ccas recruitment-criteria set --file`.
@@ -168,63 +146,9 @@ For zsh, prefer generating the script once to a file and sourcing that (`ccas co
 
 Dynamic candidates come from `${XDG_CACHE_HOME:-~/.cache}/ccas/clubs.txt` and `recent-jobs.txt`, refreshed automatically as you run normal commands (the club list is fetched from `GET /api/managed-clubs` at most every few hours — falling back to `GET /api/clubs` only while you manage no clubs yet; each submitted job id is recorded). On a fresh install these are empty, so only subcommands and flags complete until the first command populates them — unless `default_clubs` is set in the [config file](#cli-config-file), which seeds the club list so completion works immediately.
 
-## Applications
+## Jobs and the API
 
-Jobs can be submitted via the REST API or run on a schedule.
-
-| Job             | Description                                                                                                       |
-|-----------------|-------------------------------------------------------------------------------------------------------------------|
-| **Recruitment** | Scouts players from source clubs, filters by rating/activity/experience criteria, produces recruitment candidates |
-| **Membership**  | Reconciles the club member list against the Chess.com API, tracks joins and departures                            |
-| **History**     | Crawls match archives for club members, discovering new players wave by wave                                      |
-| **MatchRef**    | Resolves player/club references to concrete match boards (runs automatically after other jobs)                    |
-| **Stats**       | Summarises club match results over a date range                                                                  |
-| **ClubData**    | Refreshes club profiles and admin lists (scheduled only — no submit endpoint)                                    |
-
-## API
-
-### Health
-
-```
-GET  /health          200 (liveness)
-GET  /health/ready    200 | 503 (checks DB connectivity); body {"database": "<host>[:port]/<db>"}, no credentials
-```
-
-### Jobs
-
-```
-POST /api/jobs/recruitment
-     { club, alias?, target?, cumulative?, sourceClubs?, timeLimitMinutes?, explore? }
-
-POST /api/jobs/membership
-     { clubs, trustUsernames? }
-
-POST /api/jobs/history
-     { clubs, full?, refresh? }
-
-POST /api/jobs/matchref
-     (no body)
-
-POST /api/jobs/stats
-     { club, since?, until? }
-
-GET  /api/jobs             List recent jobs (last 50)
-GET  /api/jobs/:id         Job status by ID
-POST /api/jobs/:id/cancel  Request cancellation of a running job
-```
-
-`club` — and each element of the batch endpoints' `clubs` — names one club, as either `{"kind": "by_id", "clubId": 123}` or `{"kind": "by_slug", "slug": "team-alpha"}`. One or the other, never both: an id resolves whatever the club has since been renamed to, a name is looked up (current names first, then former ones), and a request carrying both could disagree with itself. Every other route that names a club — blacklist, recruitment criteria, managed clubs, schedules, recruitment reports — takes it the same way, or in a URL as exactly one of `?clubId=` / `?slug=`, and answers with how it resolved.
-
-Blacklist entries are **not** jobs — they are synchronous `/api/blacklist` routes. The full route surface, including those, the recruitment-criteria and managed-club routes and the per-run recruitment reporting, is in [`docs/architecture.md`](docs/architecture.md) § Routes.
-
-### Schedules
-
-```
-GET    /api/schedules          List all schedules
-POST   /api/schedules          { kind, club?, params?, triggerType?, intervalHours?, cron?, timezone?, misfire? }
-PUT    /api/schedules/:id      { intervalHours?, cron?, timezone?, misfire?, enabled?, params? }
-DELETE /api/schedules/:id
-```
+Every CLI command that reads or changes club data goes through the server's HTTP API, which scripts can call too. What each job does is in [`docs/architecture.md`](docs/architecture.md), section Applications, and every route, with how a request names a club, in section Routes.
 
 ## Configuration
 
@@ -235,23 +159,23 @@ The variables needed to boot are in [`.env.example`](.env.example); [`applicatio
 | `CCAS_CONTACT_EMAIL` | Contact in the `User-Agent` header of Chess.com API requests. Anything that calls Chess.com — the server included — refuses to start without it |
 | `DATABASE_URL` *or* `DB_USER` + `DB_PASSWORD` + `DB_NAME` + `DB_PORT` + `DB_HOST` + `DB_SCHEMA` | PostgreSQL connection. `DATABASE_URL` (JDBC form, single-quoted to escape `&`) takes priority; the `DB_*` fields are only consulted when it's absent |
 
-> **Provider connection strings work as-is.** Neon, Heroku, Render, Supabase and friends hand out the *libpq* URI — `postgresql://user:pass@host/db?sslmode=require&channel_binding=require` — which pgJDBC rejects outright: it accepts neither the `postgresql://` scheme (it wants `jdbc:postgresql://`) nor credentials in userinfo position (it wants `?user=`/`?password=`), and a verbatim paste used to fail at boot with the driver-level `RuntimeException: Failed to get driver instance for jdbcUrl=…`. `DATABASE_URL` now accepts either form and converts, so paste whichever your provider gives you. Credentials are lifted out of the URL and handed to the pool separately either way, so they cannot leak through that message. `channel_binding` becomes pgJDBC's `channelBinding`: with `sslmode=require` pgJDBC checks no certificate, so channel binding is what proves the server is the one you meant; a JDBC-form URL asks for it with `channelBinding=require`. The other libpq-only parameters providers include, such as `connect_timeout`, are dropped.
+`DATABASE_URL` takes either the JDBC form or the `postgresql://user:pass@host/db?…` URI that Neon, Render, Supabase and friends hand out, and converts the latter, so paste whichever your provider gives you ([ADR 0014](docs/adr/0014-accept-both-database-url-forms.md)).
 
-Optional overrides with defaults:
+Optional overrides, with their defaults in [`application.conf`](src/main/resources/application.conf):
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SERVER_PORT` | 8080 | HTTP server port |
-| `SERVER_HOST` | 127.0.0.1 | Bind address. Loopback by default (single-user, no-auth local model); set `0.0.0.0` for hosted deploys |
-| `SCHEDULER_POLL_MINUTES` | 15 | How often the scheduler checks for due jobs, so the most a due job waits to start. An interval schedule runs at the check nearest its time, so up to half this early ([ADR 0029](docs/adr/0029-an-interval-schedule-fires-at-the-tick-nearest-its-time.md)). Most checks don't touch the database, so on Neon a shorter interval costs little; [ADR 0028](docs/adr/0028-the-scheduler-reads-only-when-a-schedule-can-be-due.md) says when one does |
-| `SCHEDULER_<JOB>_INTERVAL_HOURS` / `SCHEDULER_<JOB>_ENABLED` | — | Boot-seed cadence/enable, per job, defaults in `application.conf`. Two groups: the global sweeps `MATCHREF` and `CLUBDATA`, seeded once; and `HISTORY` and `MEMBERSHIP`, seeded once **per managed club**. Seed-only: at every boot, a schedule of that kind that does not exist yet (for each managed club, in the second group) is created with these values, and one that exists keeps its own. So a seeded schedule removed with `ccas schedule remove` returns at the next boot; to stop one, disable it (`PUT /api/schedules/:id` with `{"enabled": false}`) |
-| `DB_POOL_MAX` / `DB_POOL_MIN_IDLE` | 20 / 0 | HikariCP pool sizing (a `MIN_IDLE` above 0 keeps a Neon compute awake) |
-| `DB_POOL_CONNECTION_TIMEOUT` / `DB_POOL_IDLE_TIMEOUT` / `DB_POOL_MAX_LIFETIME` / `DB_POOL_KEEPALIVE_TIME` | 30 000 / 30 000 / 1 800 000 / 0 (off) ms | HikariCP timeouts |
-| `CHESS_COM_API_COOLDOWN_SECONDS` | 15 | Backoff cooldown after rate limiting (Cloudflare has its own, `CHESS_COM_API_CF_COOLDOWN_SECONDS`) |
+| Variable | Description |
+|----------|-------------|
+| `SERVER_PORT` | HTTP server port |
+| `SERVER_HOST` | Bind address. Loopback by default (single-user, no-auth local model); set `0.0.0.0` for hosted deploys |
+| `SCHEDULER_POLL_MINUTES` | How often the scheduler checks for due jobs, so the most a due job waits to start. An interval schedule runs at the check nearest its time, so up to half this early ([ADR 0029](docs/adr/0029-an-interval-schedule-fires-at-the-tick-nearest-its-time.md)). Most checks don't touch the database, so on Neon a shorter interval costs little; [ADR 0028](docs/adr/0028-the-scheduler-reads-only-when-a-schedule-can-be-due.md) says when one does |
+| `SCHEDULER_<JOB>_INTERVAL_HOURS` / `SCHEDULER_<JOB>_ENABLED` | Boot-seed cadence/enable, per job. Two groups: the global sweeps `MATCHREF` and `CLUBDATA`, seeded once; and `HISTORY` and `MEMBERSHIP`, seeded once **per managed club**. Seed-only: at every boot, a schedule of that kind that does not exist yet (for each managed club, in the second group) is created with these values, and one that exists keeps its own. So a seeded schedule removed with `ccas schedule remove` returns at the next boot; to stop one, disable it (`PUT /api/schedules/:id` with `{"enabled": false}`) |
+| `DB_POOL_MAX` / `DB_POOL_MIN_IDLE` | HikariCP pool sizing (a `MIN_IDLE` above 0 keeps a Neon compute awake) |
+| `DB_POOL_CONNECTION_TIMEOUT` / `DB_POOL_IDLE_TIMEOUT` / `DB_POOL_MAX_LIFETIME` / `DB_POOL_KEEPALIVE_TIME` | HikariCP timeouts, in ms |
+| `CHESS_COM_API_COOLDOWN_SECONDS` | Backoff cooldown after rate limiting (Cloudflare has its own, `CHESS_COM_API_CF_COOLDOWN_SECONDS`) |
 
 API fan-out has no permit variable of its own: the in-flight ceiling is the **last `CHESS_COM_API_RECOVERY_TIERS` entry**, between which the gate moves with observed success ([ADR 0012](docs/adr/0012-gate-based-adaptive-throttle.md)), and fan-out is then capped again against the DB pool ([ADR 0004](docs/adr/0004-api-fan-out-concurrency-cap.md)). See [`application.conf`](src/main/resources/application.conf) for the full set of tunable parameters.
 
-**Letting a Neon compute scale to zero.** Neon suspends a compute after 5 minutes with no active query, and the pool's defaults allow that: they keep no idle connection, send no keepalive ping, and retire a connection once it has sat idle for 30 s. Raising `DB_POOL_MIN_IDLE` above 0 or setting `DB_POOL_KEEPALIVE_TIME` keeps the compute awake for as long as the server runs, spending the free tier's monthly compute hours (#420). The cost of the defaults is a cold-start delay on the next query and the occasional transient `08xxx` reconnect, which the socket-timeout and transient-retry hardening absorbs. Expect benign "idle" warnings if a command sits at a confirmation prompt. An idle server's scheduler reads the database now and then, not at every poll ([ADR 0028](docs/adr/0028-the-scheduler-reads-only-when-a-schedule-can-be-due.md)).
+Running against Neon, where a compute suspends when idle, has its own page: [`docs/neon.md`](docs/neon.md) covers the pool settings that let it, and backups.
 
 ### Server config file (`ccas config`)
 
@@ -271,14 +195,14 @@ At boot the server applies this file as a JVM overlay, so the **resolution order
 
 ### DB-owned settings
 
-Some app-wide policy lives in the `app_setting` table (`key TEXT PK, value TEXT`) rather than HOCON/env, so it stays consistent across every process on one DB and is tunable without a redeploy. Each setting has a compiled-in default used when its row is absent; the DB row, once set, overrides it. The registry is `AppSetting.all`:
+Some app-wide policy lives in the `app_setting` table (`key TEXT PK, value TEXT`) rather than HOCON/env, so it stays consistent across every process on one DB and is tunable without a redeploy. Each setting has a compiled-in default used when its row is absent; the DB row, once set, overrides it. The registry, defaults included, is `AppSetting.all`:
 
-| Key | Default | Effect |
-|-----|---------|--------|
-| `cache_retention_days` | 60 | How long cached Chess.com responses are kept before the retention sweep drops them |
-| `fetch_failure_retention_days` | 30 | How long `api_fetch_failure` audit rows are kept |
-| `job_log_retention_days` | 14 | How long per-job log files are kept |
-| `progress_refresh_interval_ms` | 100 | How often a followed job's progress bar redraws |
+| Key | Effect |
+|-----|--------|
+| `cache_retention_days` | How long cached Chess.com responses are kept before the retention sweep drops them |
+| `fetch_failure_retention_days` | How long `api_fetch_failure` audit rows are kept |
+| `job_log_retention_days` | How long per-job log files are kept |
+| `progress_refresh_interval_ms` | How often a followed job's progress bar redraws |
 
 Change one with SQL:
 
@@ -302,26 +226,22 @@ Set the two R2 credentials with `ccas config set` rather than in `.env` — `cca
 
 The store is deliberately **non-critical**: it is a cache, not a source of truth, so a lost or unreachable body just re-fetches from Chess.com. An outage degrades caching to off — reads fall through to the network, writes are skipped, requests keep succeeding — and the cache self-heals on the first successful write. The server logs one warning when the store first fails and one info line when it recovers, rather than one line per failed operation.
 
-Because waiting on a cache is never obligatory, the same applies to a store that is merely **slow**: every operation has a deadline, and breaching it degrades exactly like an error.
+Because waiting on a cache is never obligatory, the same applies to a store that is merely **slow**: every operation has a deadline, and breaching it degrades exactly like an error. The defaults are in [`application.conf`](src/main/resources/application.conf), and deliberately loose: tighten them from `client_stats.cache_unserved`, not by guessing, since a read deadline below the store's real p99 turns the cache into an amplifier of Chess.com load ([ADR 0009](docs/adr/0009-bound-every-body-store-operation.md)).
 
-| Key | Default | Effect |
-|-----|---------|--------|
-| `CCAS_BODY_STORE_READ_TIMEOUT_MS` | 5000 | Deadline for a cache read. Breaching it costs one Chess.com request |
-| `CCAS_BODY_STORE_WRITE_TIMEOUT_MS` | 10000 | Deadline for a cache write. Breaching it only means the response is not cached |
-| `CCAS_R2_CONNECT_TIMEOUT_MS` | 2000 | `s3` transport connect timeout |
-| `CCAS_R2_SOCKET_TIMEOUT_MS` | 5000 | `s3` transport socket timeout. Must not exceed the widest deadline above |
+| Key | Effect |
+|-----|--------|
+| `CCAS_BODY_STORE_READ_TIMEOUT_MS` | Deadline for a cache read. Breaching it costs one Chess.com request |
+| `CCAS_BODY_STORE_WRITE_TIMEOUT_MS` | Deadline for a cache write. Breaching it only means the response is not cached |
+| `CCAS_R2_CONNECT_TIMEOUT_MS` | `s3` transport connect timeout |
+| `CCAS_R2_SOCKET_TIMEOUT_MS` | `s3` transport socket timeout. Must not exceed the widest deadline above |
 
-The defaults are deliberately loose, and tightening them is not free: a bypassed read costs a full Chess.com request, so a read deadline below the store's real p99 turns the cache into an *amplifier* of upstream load. Tighten from measurement — `client_stats.cache_unserved` counts entries that were counted as cache hits but could not actually be served — rather than by guessing.
-
-One accepted wart: a write abandoned at its deadline can still land in the bucket afterwards, while CCAS has (correctly) skipped the database row that would reference it. Nothing can later find that object, because the cleanup sweep walks database rows. The same is true of an object whose delete fails during cleanup, which is not new. It costs storage only, and self-heals if the identical body is ever fetched again.
-
-To collect them, set an **age-based** lifecycle rule on the bucket — S3/R2 rules cannot see CCAS's tables, so there is no "unreferenced" rule to write. The longest retention window (`cache_retention_days`, `fetch_failure_retention_days`) is a floor rather than a safe value: the rule expires objects by age while retention expires *rows* by age, and an entry that keeps revalidating holds a young row over an arbitrarily old object. Allow a wide margin — 180 days against the 60-day default — and scope the rule to a key prefix if the bucket ever holds anything besides cached bodies. Note that R2's default *multipart abort* rule is not an expiry rule and collects none of this. Too short degrades rather than corrupts, though not identically for both kinds of object: an early-expired *cached response* is simply refetched, at the cost of one request, while an early-expired *fetch-failure* body has nothing to refetch from — that audit row just loses its response body.
+On an `s3` bucket, set an **age-based** lifecycle rule with a wide margin over the longest retention window, since a few objects escape the cleanup sweep; R2's default multipart-abort rule is not one. [ADR 0009](docs/adr/0009-bound-every-body-store-operation.md) says which objects, and why the margin must be wide.
 
 ### Deployment model
 
 **One `CcasServer` per database is the supported model.** Running CLI commands alongside that server against the same DB is fine — the CLI has no `JobRunner`, so it never touches scheduled-job state; it only shares the Chess.com egress.
 
-Running **two or more servers** against one DB is **not supported** and is at your own risk: a starting server marks *all* `Running` jobs as failed with no instance-ownership filter (it would kill another server's live jobs — #110), and the Chess.com rate limiter is per-process (N servers ≈ N× the per-IP request rate — #111), and each server's job-log sweep spares only the jobs running in its own process, so of two servers sharing a job-log directory, either deletes the log of a job the other is running once that job has written nothing for a whole retention window. Each server also runs its own daily retention sweep, so N servers sweep N times against one orphan set — harmless (row deletes are idempotent, object deletes best-effort) but wasteful, and it multiplies the mid-flight cache race described in [ADR 0007](docs/adr/0007-response-caching-in-postgres.md). Multi-server hosting is tracked separately under #60 and is gated on fixing both.
+Running **two or more servers** against one DB is **not supported**: a starting server marks every `Running` job failed, another server's included (#110), and the Chess.com rate limiter is per-process, so N servers send N times the per-IP request rate (#111). Multi-server hosting is tracked under #60, gated on both.
 
 ### CLI config file
 
@@ -342,41 +262,6 @@ ready_timeout_seconds = 90                          # readiness wait for `ccas s
 - A missing file is fine — the CLI falls back to built-in defaults. A malformed file fails fast with `error: invalid config file <path>: …` (exit 2).
 
 This is separate from the server's `application.conf` / environment configuration above.
-
-## Backups
-
-Production data lives on Neon's free plan, which retains only 24h of point-in-time recovery. [`scripts/backup-neon.sh`](scripts/backup-neon.sh) takes a weekly compressed logical dump to local disk as the disaster-recovery floor. It is read-only (`pg_dump` only) and reads the server's connection config the way the server does — `DATABASE_URL` in either form, otherwise the `DB_*` fields, each from the environment and otherwise from `ccas.env` — so it dumps the database the server uses, with nothing to export. The rebuildable cache / diagnostics tables (`api_response_cache`, `api_response_body`, `api_fetch_failure`) are dumped schema-only (`--exclude-table-data`) to keep dumps small.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CCAS_BACKUP_DIR` | `${XDG_DATA_HOME:-~/.local/share}/ccas/backups` | Output directory for `.dump` files |
-| `CCAS_BACKUP_RETAIN` | 6 | Number of most-recent dumps to keep (older are pruned) |
-
-Run it once manually, then schedule weekly. Sunday 04:00, cron's local time; cron's own `PATH` is `/usr/bin:/bin`, so add the directory holding the `pg_dump` that `command -v pg_dump` finds, and set any `CCAS_BACKUP_*` variable on the crontab line too:
-
-```cron
-PATH=/opt/homebrew/bin:/usr/bin:/bin
-0 4 * * 0 /path/to/ccas/scripts/backup-neon.sh >> ~/.local/share/ccas/backups/backup.log 2>&1
-```
-
-A weekly cadence is one Neon compute wake per week — negligible against the free plan's monthly compute allowance. Restore a dump with `pg_restore` (use a version **≥** the `pg_dump` that wrote the file — a custom-format archive can't be read by an older `pg_restore`), as the role the app connects with. Restored as anyone else, the objects belong to that user, and the app fails on them with permission errors. Into a fresh local database:
-
-```bash
-createdb -O ccas <db>
-pg_restore --no-owner --no-privileges --role=ccas -d <db> ccas-<stamp>.dump   # errors about pg_stat_statements are harmless
-```
-
-`--role` needs a superuser or a member of `ccas`. Into any other database, connect as the app's role instead and drop `--role`: `pg_restore --no-owner --no-privileges -d <conn-as-app-role> ccas-<stamp>.dump`.
-
-## Project Structure
-
-```
-src/main/scala/ccas/
-  api/         Chess.com API models and client
-  analysis/    Domain tables and business logic (apps)
-  server/      HTTP server, job runner, scheduler
-  utils/       Shared infrastructure (HTTP client, JSON, SQL, logging)
-```
 
 ## Troubleshooting
 
@@ -407,10 +292,10 @@ The first poll runs at boot, and fires every schedule that came due while the se
 
 **Any build fails with `Unable to locate a Java Runtime`.** Check `java -version` before suspecting anything else. This has happened via a stale SDKMAN candidate: an entry installed from Homebrew (`21.0.12-brew`) is a symlink into the Homebrew keg, so removing or upgrading that formula leaves the candidate dangling and every `java` invocation fails. `sdk env` in the repo root selects the pinned Temurin build; `sdk uninstall java <dangling-candidate>` clears the stale entry.
 
-**Phantom `X is not a member of ccas` compile errors, or tests failing with `error while loading …tasty` or `relation … does not exist`.** IntelliJ's sbt shell and a terminal `sbt` share `target/`, and concurrent use corrupts the Zinc incremental-compilation state; IntelliJ's own compile server and test runs share `target/` and the `ccas_test` database too. Run one at a time; `sbt clean` recovers. A failure that repeats with IntelliJ closed is real.
-
 ## Further Reading
 
+- [Contributing](CONTRIBUTING.md) -- setting up a clone to work on the code
+- [Running on Neon](docs/neon.md) -- the pool settings for a suspending compute, and backups
 - [Architecture reference](docs/architecture.md) -- what each part is and how the pieces connect
 - [Architecture decision records](docs/adr/) -- why things are the way they are, one decision per file
 - [Documentation standard](docs/documentation-standard.md) -- where each kind of knowledge lives, and how much of it to write
