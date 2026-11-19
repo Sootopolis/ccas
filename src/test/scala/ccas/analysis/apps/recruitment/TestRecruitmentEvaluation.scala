@@ -184,7 +184,8 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
     testEarlierFigureDoesNotRejectFromRedatedRow,
     testRefreshedClubCountRejectsFromCacheNextTime,
     testRedatedRowKeepsEarlierTimeouts,
-    testFreshRowKeepsItsFiguresAndDate
+    testFreshRowKeepsItsFiguresAndDate,
+    testFreshRowKeepsGameCountWithoutArchives
   )
 
   /** A row too old for its figures to reject from cache, holding 100 ongoing games. */
@@ -289,6 +290,21 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
         rowOption.flatMap(_.clubCount).contains(2),
         rowOption.flatMap(_.dailyElo) == seeded.dailyElo,
         rowOption.flatMap(_.ongoingGames) == seeded.ongoingGames
+      )
+    }
+
+  private def testFreshRowKeepsGameCountWithoutArchives =
+    test("a daily stats check that reads no archives keeps a fresh row's daily game count") {
+      val seeded = cacheWithTimeouts(dailyTimeoutAgeDaysOption = None, tmTimeoutAgeDaysOption = None)
+        .copy(fetchedAt = Instant.now().minus(Duration.ofDays(5)), dailyGamesFinished = Some(37))
+      for {
+        _         <- seedCache(seeded)
+        recorded  <- evaluateOnce(cleanEvaluationResponses, makeCriteria())
+        rowOption <- PlayerRecruitmentCache.selectId(pid0)
+      } yield assertTrue(
+        recorded.contains(passed),
+        rowOption.flatMap(_.dailyElo).contains(Elo(1200)), // refreshed by the check, so it ran
+        rowOption.flatMap(_.dailyGamesFinished).contains(37)
       )
     }
 
@@ -620,6 +636,24 @@ object TestRecruitmentEvaluation extends ZIOSpecDefault {
       entry = FigureCriterion.MaxDailyTimeoutPercent,
       criteria = makeCriteria().copy(dailyMaxTimeoutPercent = Some(10.0)),
       responses = () => aliceStats(apiPlayerStatsJson(timeoutPct = 15.0))
+    ),
+    LiveAndCachedRow(
+      entry = FigureCriterion.ZeroToleranceDailyTimeout,
+      criteria = zeroDailyTolerance,
+      // A casual timeout, which Chess.com's rate of 0 leaves out.
+      responses = () => {
+        val tenDaysAgo = Instant.now().minus(Duration.ofDays(10)).getEpochSecond
+        val timeout = archiveGameJson(
+          white = "alice",
+          black = "bob",
+          whiteResult = "timeout",
+          blackResult = "win",
+          endTime = tenDaysAgo,
+          rated = false
+        )
+        aliceStats(apiPlayerStatsJson(timeoutPct = 0.0)) ++
+          archivesInWindow("alice", Instant.now(), archiveJson(List(timeout)))
+      }
     ),
     LiveAndCachedRow(
       entry = FigureCriterion.MinDailyGamesFinished,

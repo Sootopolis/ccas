@@ -333,13 +333,16 @@ private[recruitment] object RecruitmentFilterDefs {
       env: FilterEnv,
       dailyStats: ApiPlayerStats.ApiPlayerDailyStats
     ): RIO[PostgresClient, FilterResult] = {
-      val dailyElo           = dailyStats.last.rating
-      val dailyTimeoutPct    = dailyStats.record.timeoutPercent
-      val dailyGamesFinished = dailyStats.record.nGames
+      val dailyElo        = dailyStats.last.rating
+      val dailyTimeoutPct = dailyStats.record.timeoutPercent
+      val criteria        = env.run.criteria
+      // The 90-day archives, for a timeout's date or the minimum's game count. At a limit of 0 even a rate of 0 needs
+      // them: the rate leaves out the casual, chess960 and unmoved games the limit counts (#476).
+      val zeroTolerance = criteria.dailyMaxTimeoutPercent.contains(0.0)
+      val readArchives  = dailyTimeoutPct > 0 || criteria.dailyMinGamesFinished.isDefined || zeroTolerance
       for {
-        // Fetch 90-day archives only when player has timed out before (timeoutPct > 0)
         archives <-
-          ZIO.when(dailyTimeoutPct > 0 || env.run.criteria.dailyMinGamesFinished.isDefined) {
+          ZIO.when(readArchives) {
             val months = recentArchiveMonths(env.run.now, StatsWindowDays)
             ZIO.foreachPar(months) { ym =>
               val url = ApiPlayerArchive.getUrl(env.candidate.username, ym.getYear, ym.getMonthValue)
@@ -358,12 +361,14 @@ private[recruitment] object RecruitmentFilterDefs {
           b = env.candidate.cacheOption.flatMap(_.lastDailyTimeoutAt)
         )
         val dailyTimePerMove = dailyStats.record.timePerMove
-        val slowMoves        = env.run.criteria.dailyMaxHoursPerMove.exists(hours => dailyTimePerMove > hours * 3600)
-        val updatedCache = writeFigures(env, apiPlayer.playerId) {
-          _.copy(
+        val slowMoves        = criteria.dailyMaxHoursPerMove.exists(hours => dailyTimePerMove > hours * 3600)
+        val updatedCache = writeFigures(env, apiPlayer.playerId) { cache =>
+          cache.copy(
             dailyElo = Some(dailyElo),
             dailyTimeoutPct = Some(dailyTimeoutPct),
-            dailyGamesFinished = Some(dailyGamesFinished90d.getOrElse(dailyGamesFinished)),
+            // Every daily game in the archives, on purpose (#476); without them, the row's own 90-day count, never
+            // Chess.com's all-time record count.
+            dailyGamesFinished = dailyGamesFinished90d.orElse(cache.dailyGamesFinished),
             lastDailyTimeoutAt = mergedDailyTimeout,
             dailyScoreRate = Some(dailyStats.record.scoreRate)
           )

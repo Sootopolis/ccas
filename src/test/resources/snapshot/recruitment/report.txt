@@ -9,12 +9,12 @@ team-alpha's criteria "default", version of 2026-03-18 09:00 UTC:
   dailyMinElo               1000   daily rating at least this
   dailyMinScoreRate         0.375  daily score rate at least this, draws counting half
   dailyMaxScoreRate         0.875  daily score rate at most this, draws counting half
-  dailyMinGamesFinished     20     at least this many daily games ended in the last 90 days
+  dailyMinGamesFinished     20     at least this many daily games of any kind ended in the last 90 days
   dailyMaxTimeoutPercent    5      timed out of at most this % of daily games, by Chess.com's figure
   dailyMaxHoursPerMove      12     averages at most this many hours a daily move
   dailyMaxOngoingGames      60     playing at most this many daily games now
-  dailyMinTmGamesFinished   10     at least this many team-match games ended in the last 90 days
-  dailyMaxTmTimeoutPercent  0      timed out of at most this % of team-match games in the last 90 days
+  dailyMinTmGamesFinished   10     at least this many team-match games of any kind ended in the last 90 days
+  dailyMaxTmTimeoutPercent  0      timed out of at most this % of team-match games of any kind in the last 90 days
 
 Started:   2025-06-01T00:00:00Z
 Completed: 2025-06-01T00:12:00Z

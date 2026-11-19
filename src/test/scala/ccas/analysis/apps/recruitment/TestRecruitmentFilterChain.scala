@@ -1,9 +1,9 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.{Duration, Instant, LocalDate, YearMonth, ZoneOffset}
+import java.time.{Duration, Instant}
 
 import com.augustnagro.magnum.sql
-import zio.{RIO, ZLayer}
+import zio.{Clock, RIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
@@ -57,6 +57,11 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     testFirstFailingCriterionIsRecorded,
     testDailyMinGamesFinishedCountsTeamMatchGames,
     testDailyMinGamesFinishedExcludesNonDailyGames,
+    testDailyMinGamesFinishedCountsEveryDailyGame,
+    testUnratedNoMoveTmTimeoutCounts,
+    testNoArchivesStoreNoGameCount,
+    testZeroLimitCasualTimeoutRejectsLive,
+    testZeroLimitTeamMatchTimeoutRejectsLive,
     testArchiveFetchFailureRecordedInApiFetchFailure,
     testExtractLastDailyTimeoutIgnoresNonDailyGames,
     testRejectsByDailyMaxHoursPerMove,
@@ -173,8 +178,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       // Archive has 2 TM games + 1 non-TM game = 3 daily games in 90d window
       val now        = Instant.now()
       val recent     = now.minus(Duration.ofDays(10)).getEpochSecond
-      val ym         = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
-      val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val archiveKey = currentMonthArchiveKey("alice", now)
       val games = List(
         archiveGameJson(
           white = "alice",
@@ -206,8 +210,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     test("dailyMinGamesFinished excludes non-daily games from archives") {
       val now        = Instant.now()
       val recent     = now.minus(Duration.ofDays(10)).getEpochSecond
-      val ym         = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
-      val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val archiveKey = currentMonthArchiveKey("alice", now)
       val games = List(
         archiveGameJson(white = "alice", black = "bob", endTime = recent, timeClass = "daily"),
         archiveGameJson(white = "alice", black = "carol", endTime = recent, timeClass = "blitz"),
@@ -225,11 +228,127 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
       )
     }
 
+  private def testDailyMinGamesFinishedCountsEveryDailyGame =
+    test("dailyMinGamesFinished counts casual and chess960 daily games, and ones nobody moved in (#476)") {
+      val now    = Instant.now()
+      val recent = now.minus(Duration.ofDays(10)).getEpochSecond
+      // The fixture's PGN is empty: nobody moved in any of these.
+      val games = List(
+        archiveGameJson(white = "alice", black = "bob", endTime = recent, rated = false),
+        archiveGameJson(white = "alice", black = "carol", endTime = recent, rules = "chess960")
+      )
+      val responses = Map(
+        "player/alice"                       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats"                 -> apiPlayerStatsJson(),
+        currentMonthArchiveKey("alice", now) -> archiveJson(games)
+      )
+      val criteria = makeCriteria().copy(dailyMinGamesFinished = Some(2))
+      for { recorded <- evalSingle(responses, criteria) } yield assertTrue(recorded.contains(passed))
+    }
+
+  private def testUnratedNoMoveTmTimeoutCounts =
+    test("an unrated team-match timeout in a game nobody moved in counts towards dailyMaxTmTimeoutPercent (#476)") {
+      val now    = Instant.now()
+      val recent = now.minus(Duration.ofDays(10)).getEpochSecond
+      val games = List(
+        archiveGameJson(
+          white = "alice",
+          black = "bob",
+          whiteResult = "timeout",
+          blackResult = "win",
+          endTime = recent,
+          matchUrl = Some("https://api.chess.com/pub/match/111"),
+          rated = false
+        ),
+        archiveGameJson(
+          white = "alice",
+          black = "carol",
+          endTime = recent,
+          matchUrl = Some("https://api.chess.com/pub/match/222")
+        )
+      )
+      val responses = Map(
+        "player/alice"                       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats"                 -> apiPlayerStatsJson(),
+        currentMonthArchiveKey("alice", now) -> archiveJson(games)
+      )
+      val criteria = makeCriteria().copy(dailyMaxTmTimeoutPercent = Some(5.0))
+      for { recorded <- evalSingle(responses, criteria) } yield assertTrue(
+        recorded.contains(rejectedFor(RejectionReason.DailyMaxTmTimeoutPercent))
+      )
+    }
+
+  /** Alice, whose only timeout in the window is `game`, by Chess.com's rate never timed out. */
+  private def aliceTimedOutOnlyIn(game: Instant => String): Map[String, String] = {
+    val now = Instant.now()
+    Map(
+      "player/alice"                       -> apiPlayerJson(200, "alice"),
+      "player/alice/stats"                 -> apiPlayerStatsJson(timeoutPct = 0.0),
+      currentMonthArchiveKey("alice", now) -> archiveJson(List(game(now.minus(Duration.ofDays(10)))))
+    )
+  }
+
+  private val zeroDailyTolerance = makeCriteria().copy(dailyMaxTimeoutPercent = Some(0.0))
+
+  private def testZeroLimitCasualTimeoutRejectsLive =
+    test(
+      "at a daily timeout limit of 0, a casual timeout that Chess.com's rate leaves out rejects in the run that finds it"
+    ) {
+      val responses = aliceTimedOutOnlyIn { ended =>
+        archiveGameJson(
+          white = "alice",
+          black = "bob",
+          whiteResult = "timeout",
+          blackResult = "win",
+          endTime = ended.getEpochSecond,
+          rated = false
+        )
+      }
+      for { recorded <- evalSingle(responses, zeroDailyTolerance) } yield assertTrue(
+        recorded.contains(rejectedFor(RejectionReason.RecentDailyTimeout))
+      )
+    }
+
+  private def testZeroLimitTeamMatchTimeoutRejectsLive =
+    test("at a daily timeout limit of 0, an unrated team-match timeout counts too") {
+      val responses = aliceTimedOutOnlyIn { ended =>
+        archiveGameJson(
+          white = "alice",
+          black = "bob",
+          whiteResult = "timeout",
+          blackResult = "win",
+          endTime = ended.getEpochSecond,
+          matchUrl = Some("https://api.chess.com/pub/match/111"),
+          rated = false
+        )
+      }
+      for { recorded <- evalSingle(responses, zeroDailyTolerance) } yield assertTrue(
+        recorded.contains(rejectedFor(RejectionReason.RecentDailyTimeout))
+      )
+    }
+
+  private def testNoArchivesStoreNoGameCount =
+    test("a daily stats check that reads no archives stores no game count, which a later minimum can't reject from") {
+      val responses = Map(
+        "player/alice"       -> apiPlayerJson(200, "alice"),
+        "player/alice/stats" -> apiPlayerStatsJson(wins = 5, losses = 0, draws = 0)
+      )
+      val criteria = makeCriteria()
+      for {
+        _         <- evalSingle(responses, criteria)
+        cachedRow <- PlayerRecruitmentCache.selectId(pid0).someOrFailException
+        now       <- Clock.instant
+        laterCheck = FigureCheck(cachedRow, criteria.copy(dailyMinGamesFinished = Some(20)), now)
+      } yield assertTrue(
+        cachedRow.dailyGamesFinished.isEmpty,
+        FigureCriterion.firstFromCache(laterCheck).isEmpty
+      )
+    }
+
   private def testArchiveFetchFailureRecordedInApiFetchFailure =
     test("archive fetch failure is recorded in ApiFetchFailure") {
       val now        = Instant.now()
-      val ym         = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
-      val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val archiveKey = currentMonthArchiveKey("alice", now)
       val responses = Map(
         "player/alice"       -> apiPlayerJson(200, "alice"),
         "player/alice/stats" -> apiPlayerStatsJson(wins = 100, losses = 50, draws = 10),
@@ -256,8 +375,7 @@ object TestRecruitmentFilterChain extends ZIOSpecDefault {
     test("extractLastDailyTimeout ignores non-daily timeClass games") {
       val now        = Instant.now()
       val recent     = now.minus(Duration.ofDays(10)).getEpochSecond
-      val ym         = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
-      val archiveKey = s"player/alice/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+      val archiveKey = currentMonthArchiveKey("alice", now)
       val games = List(
         // Blitz timeout — should NOT count as lastDailyTimeoutAt
         archiveGameJson(

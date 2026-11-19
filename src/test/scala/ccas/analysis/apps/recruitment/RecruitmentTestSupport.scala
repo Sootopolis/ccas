@@ -1,6 +1,6 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.{Duration, Instant}
+import java.time.{Duration, Instant, LocalDate, YearMonth, ZoneOffset}
 
 import com.augustnagro.magnum.sql
 import zio.{durationInt, Clock, Fiber, Promise, Ref, RIO, Scope, Semaphore, Trace, UIO, ZEnvironment, ZIO}
@@ -174,7 +174,9 @@ object RecruitmentTestSupport {
     blackResult: String = "checkmated",
     endTime: Long = TestTimes.t2.getEpochSecond,
     matchUrl: Option[String] = None,
-    timeClass: String = "daily"
+    timeClass: String = "daily",
+    rated: Boolean = true,
+    rules: String = "chess"
   ): String = {
     val matchField = matchUrl.fold("")(u => s""", "match": "$u"""")
     s"""{
@@ -182,14 +184,14 @@ object RecruitmentTestSupport {
        |  "pgn": "",
        |  "time_control": "1/259200",
        |  "end_time": $endTime,
-       |  "rated": true,
+       |  "rated": $rated,
        |  "tcn": "",
        |  "uuid": "00000000-0000-0000-0000-000000000001",
        |  "initial_setup": "",
        |  "fen": "",
        |  "start_time": ${endTime - 86400},
        |  "time_class": "$timeClass",
-       |  "rules": "chess",
+       |  "rules": "$rules",
        |  "white": {
        |    "rating": 1500,
        |    "result": "$whiteResult",
@@ -209,6 +211,12 @@ object RecruitmentTestSupport {
 
   def archiveJson(games: List[String]): String =
     s"""{"games": [${games.mkString(",")}]}"""
+
+  /** The fake client's key for `username`'s archive of the month `now` falls in. */
+  def currentMonthArchiveKey(username: String, now: Instant): String = {
+    val ym = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC))
+    s"player/$username/games/${ym.getYear}/${f"${ym.getMonthValue}%02d"}"
+  }
 
   /** Serves `archive` as every month of `username`'s 90-day archive window ending at `now`. */
   def archivesInWindow(username: String, now: Instant, archive: String): Map[String, String] =

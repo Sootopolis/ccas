@@ -9,9 +9,9 @@
 [INFO hh:mm:ss]   dailyMinElo               1000   daily rating at least this
 [INFO hh:mm:ss]   dailyMinScoreRate         0.375  daily score rate at least this, draws counting half
 [INFO hh:mm:ss]   dailyMaxScoreRate         0.875  daily score rate at most this, draws counting half
-[INFO hh:mm:ss]   dailyMinGamesFinished     20     at least this many daily games ended in the last 90 days
+[INFO hh:mm:ss]   dailyMinGamesFinished     20     at least this many daily games of any kind ended in the last 90 days
 [INFO hh:mm:ss]   dailyMaxTimeoutPercent    5      timed out of at most this % of daily games, by Chess.com's figure
 [INFO hh:mm:ss]   dailyMaxHoursPerMove      12     averages at most this many hours a daily move
 [INFO hh:mm:ss]   dailyMaxOngoingGames      60     playing at most this many daily games now
-[INFO hh:mm:ss]   dailyMinTmGamesFinished   10     at least this many team-match games ended in the last 90 days
-[INFO hh:mm:ss]   dailyMaxTmTimeoutPercent  0      timed out of at most this % of team-match games in the last 90 days
+[INFO hh:mm:ss]   dailyMinTmGamesFinished   10     at least this many team-match games of any kind ended in the last 90 days
+[INFO hh:mm:ss]   dailyMaxTmTimeoutPercent  0      timed out of at most this % of team-match games of any kind in the last 90 days
