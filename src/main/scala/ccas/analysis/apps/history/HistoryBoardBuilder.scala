@@ -159,7 +159,8 @@ private[history] object HistoryBoardBuilder {
     matchId: ClubMatchId,
     dailyMatch: ApiDailyMatch,
     team1ClubIdOption: Option[ClubId],
-    team2ClubIdOption: Option[ClubId]
+    team2ClubIdOption: Option[ClubId],
+    fetchedAt: Instant
   ): ClubMatch = {
     val teams = dailyMatch.teams
     val (startTime, endTime) = dailyMatch match {
@@ -182,7 +183,7 @@ private[history] object HistoryBoardBuilder {
       team1ScoreX2 = (teams.team1.score * 2).toShort,
       team2ClubIdOption = team2ClubIdOption,
       team2ScoreX2 = (teams.team2.score * 2).toShort,
-      fetchedAt = Instant.now(),
+      fetchedAt = fetchedAt,
       // Only the settled-refresh path (HistoryProcessing.refreshSingleMatchWithBody) knows the fetch's content
       // hash; it overrides this via `.copy` before upserting. Every other caller leaves it unset.
       processedBodyHash = None

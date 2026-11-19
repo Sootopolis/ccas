@@ -34,6 +34,7 @@ object TestClubSql extends ZIOSpecDefault {
     testClubAdminInsertAndSelect,
     testClubAdminDeleteByClub,
     testClubAdminSelectPlayerIdsForSizableClubs,
+    testClubAdminActiveForAYear,
     testClubAdminReplaceForClub,
     testAnEndedRowSaysWhenLastKnownIn,
     testOverlappingRowsAreRefused,
@@ -286,24 +287,24 @@ object TestClubSql extends ZIOSpecDefault {
     test("selectPlayerIdsForSizableClubs filters by size, inactivity, and admin ratio") {
       val adminA = ClubAdmin(clubA.clubId, player0.playerId)
       val adminB = ClubAdmin(clubB.clubId, player1.playerId)
-      val now    = Instant.now()
+      val now    = Times.t3
       val stale  = now.minus(Duration.ofDays(400)) // > 1 year
       for {
         // --- Baseline: active sizable club includes its admin ---
         _           <- Club.upsert(clubA.copy(membersCount = Some(1234)))
         _           <- Club.updateLatestMatchAt(clubA.clubId, Some(now))
         _           <- ClubAdmin.insertBatch(List(adminA, adminB))
-        sizable     <- ClubAdmin.selectPlayerIdsForSizableClubs(1000)
-        noneSizable <- ClubAdmin.selectPlayerIdsForSizableClubs(2000)
+        sizable     <- ClubAdmin.selectPlayerIdsForSizableClubs(1000, now)
+        noneSizable <- ClubAdmin.selectPlayerIdsForSizableClubs(2000, now)
 
         // --- Inactive club is ignored ---
         _        <- Club.updateLatestMatchAt(clubA.clubId, Some(stale))
-        inactive <- ClubAdmin.selectPlayerIdsForSizableClubs(1000)
+        inactive <- ClubAdmin.selectPlayerIdsForSizableClubs(1000, now)
 
         // --- Over-administered club is ignored: 1 admin out of 4 members = 25% ratio ---
         _      <- Club.upsert(clubA.copy(membersCount = Some(4)))
         _      <- Club.updateLatestMatchAt(clubA.clubId, Some(now))
-        gimmic <- ClubAdmin.selectPlayerIdsForSizableClubs(1)
+        gimmic <- ClubAdmin.selectPlayerIdsForSizableClubs(1, now)
 
         // Cleanup
         _ <- ClubAdmin.deleteByClub(clubA.clubId)
@@ -314,6 +315,23 @@ object TestClubSql extends ZIOSpecDefault {
         inactive.isEmpty,
         gimmic.isEmpty
       )
+    }
+
+  private def testClubAdminActiveForAYear =
+    test(
+      "selectPlayerIdsForSizableClubs counts a club active for a year after its latest match, as of the instant given"
+    ) {
+      val lastMatch = Times.t0
+      val yearOn    = lastMatch.plus(ClubAdmin.MaxInactivity)
+      for {
+        _      <- Player.insertIfNew(player0)
+        _      <- Club.upsert(clubA.copy(membersCount = Some(1234)))
+        _      <- Club.updateLatestMatchAt(clubA.clubId, Some(lastMatch))
+        _      <- ClubAdmin.insertBatch(List(ClubAdmin(clubA.clubId, player0.playerId)))
+        within <- ClubAdmin.selectPlayerIdsForSizableClubs(1000, yearOn.minusSeconds(1))
+        after  <- ClubAdmin.selectPlayerIdsForSizableClubs(1000, yearOn.plusSeconds(1))
+        _      <- ClubAdmin.deleteByClub(clubA.clubId)
+      } yield assertTrue(within == Set(player0.playerId), after.isEmpty)
     }
 
   private def testClubAdminReplaceForClub = test("replaceForClub atomically replaces admin set") {

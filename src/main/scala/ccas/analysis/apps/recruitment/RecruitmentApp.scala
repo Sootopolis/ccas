@@ -118,7 +118,7 @@ object RecruitmentApp extends ZIOAppDefault {
                 confirmedCriteriaIdOption = None
               )
               candidates <-
-                if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias)
+                if (parsed.cumulative) RecruitmentCandidate.selectInvitedToday(run.clubId, parsed.alias, run.startedAt)
                 else RecruitmentCandidate.selectInvitedByRun(run.runId)
               resolvedMap <- PlayerName.selectCurrentNames(candidates.map(_.playerId))
               // Drop any player_id that doesn't resolve to a handle — these lists are paste-ready invite targets, and a
@@ -206,11 +206,11 @@ object RecruitmentApp extends ZIOAppDefault {
         )
       }
       resolvedTarget = target.getOrElse(DefaultTarget)
+      now <- Clock.instant
       alreadyFound <-
-        if (cumulative) RecruitmentRun.sumCandidatesFoundToday(clubId, alias)
+        if (cumulative) RecruitmentRun.sumCandidatesFoundToday(clubId, alias, now)
         else ZIO.succeed(0)
       effectiveTarget = (resolvedTarget - alreadyFound) max 0
-      now   <- Clock.instant
       runId <- RecruitmentRun.insert(clubId, criteria.criteriaId, trigger, now, Some(effectiveTarget), jobRunIdOption)
       // Just read and confirmed at the terminal, the recap is named in one line rather than shown again.
       _ <- (if (confirmedCriteriaIdOption.isDefined) { CriteriaRecap.confirmed(criteria).map(List(_)) }
@@ -234,7 +234,7 @@ object RecruitmentApp extends ZIOAppDefault {
 
       adminExcludedPlayerIds <-
         criteria.avoidAdminMinClubSize.fold(ZIO.succeed(Set.empty[PlayerId]))(
-          ClubAdmin.selectPlayerIdsForSizableClubs
+          ClubAdmin.selectPlayerIdsForSizableClubs(_, now)
         )
 
       excludedSlugs       <- ZIO.foreach(criteria.excludeClubs)(Club.selectId).map(_.flatten.map(_.slug).toSet)
@@ -484,11 +484,11 @@ object RecruitmentApp extends ZIOAppDefault {
       }
       // After the invited list, so its indented names can't read as rejections.
       _ <- logRejections(committed.rejections)
-      // Cumulative summary: show today's total across all runs. This run is already among them — the transaction above
-      // committed its Invited outcomes and its completed_at, which is what `selectInvitedToday` filters on.
+      // Cumulative summary: the total across all runs started on this run's day, so one crossing midnight still counts
+      // itself. It is among them: the transaction above committed its Invited outcomes and its completed_at.
       _ <- ZIO.whenDiscard(cumulative && alreadyFound > 0) {
         for {
-          todayCandidates  <- RecruitmentCandidate.selectInvitedToday(clubId, alias)
+          todayCandidates  <- RecruitmentCandidate.selectInvitedToday(clubId, alias, startedAt)
           todayResolvedMap <- PlayerName.selectCurrentNames(todayCandidates.map(_.playerId))
           todayUsernames = todayCandidates.map { c =>
             todayResolvedMap.getOrElse(c.playerId, Username.wrap(s"[pid=${c.playerId}]"))

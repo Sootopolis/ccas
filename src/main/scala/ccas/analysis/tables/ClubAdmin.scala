@@ -87,8 +87,11 @@ object ClubAdmin {
         }
     }
 
-  def selectPlayerIdsForSizableClubs(minMembersCount: Int): ZIO[PostgresClient, SQLException, Set[PlayerId]] = {
-    val cutoff = Instant.now().minus(MaxInactivity)
+  def selectPlayerIdsForSizableClubs(
+    minMembersCount: Int,
+    now: Instant
+  ): ZIO[PostgresClient, SQLException, Set[PlayerId]] = {
+    val cutoff = now.minus(MaxInactivity)
     connectZIO {
       sql"""WITH admin_counts AS (
               SELECT club_id, COUNT(*) AS n FROM club_admin GROUP BY club_id

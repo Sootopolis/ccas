@@ -2,7 +2,7 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Promise, Ref, RIO, Task, UIO, ZIO}
+import zio.{Clock, Promise, Ref, RIO, Task, UIO, ZIO}
 import zio.http.URL
 
 import HistoryUtils.*
@@ -127,11 +127,12 @@ private[history] object HistoryProcessing {
           case e: NetworkUnavailableException => ZIO.fail(e)
           case _: ReportedNotFound =>
             for {
-              _ <- ctx.matchesAborted.update(_ + 1)
+              _         <- ctx.matchesAborted.update(_ + 1)
+              abortedAt <- Clock.instant
               // markAborted=0 → no club_match row (orphan ref from a /matches list); just drop the pending entry
               // so we stop re-attempting. Orphan-skip-table handling is out of scope (covered by #3 option 2).
               _ <- withTransaction {
-                ClubMatch.markAborted(pm.matchId, Instant.now()) *>
+                ClubMatch.markAborted(pm.matchId, abortedAt) *>
                   HistoryPendingMatch.delete(ctx.clubId, pm.matchId, pm.isLive)
               }
               _ <- ZIO.logWarning(
@@ -200,7 +201,14 @@ private[history] object HistoryProcessing {
           resolvedIdOption = team2ClubIdOption
         )
 
-      clubMatch = HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubIdOption, team2ClubIdOption)
+      fetchedAt <- Clock.instant
+      clubMatch = HistoryBoardBuilder.buildClubMatchRow(
+        matchId,
+        dailyMatch,
+        team1ClubIdOption,
+        team2ClubIdOption,
+        fetchedAt
+      )
 
       // Determine our team position from resolved IDs
       weAreTeam1: Option[Boolean] =
@@ -288,11 +296,12 @@ private[history] object HistoryProcessing {
   def refreshSettledMatches(
     ctx: ProcessingContext,
     minAgeHours: Int
-  ): RIO[ProgressDisplay & PostgresClient, Int] = {
-    val cutoffTime =
-      if (minAgeHours <= 0) { Instant.now() }
-      else { Instant.now().minus(JDuration.ofHours(minAgeHours.toLong)) }
+  ): RIO[ProgressDisplay & PostgresClient, Int] =
     for {
+      now <- Clock.instant
+      cutoffTime =
+        if (minAgeHours <= 0) { now }
+        else { now.minus(JDuration.ofHours(minAgeHours.toLong)) }
       total <- ClubMatch.countSettledForRefresh(ctx.clubId, cutoffTime)
       refreshed <-
         if (total == 0) { ZIO.logInfo("  No settled matches to refresh").as(0) }
@@ -310,7 +319,6 @@ private[history] object HistoryProcessing {
             }
         }
     } yield refreshed
-  }
 
   private def refreshLoop(
     ctx: ProcessingContext,
@@ -334,8 +342,9 @@ private[history] object HistoryProcessing {
               // rows-affected is virtually always 1; rows == 0 indicates a concurrent delete.
               case _: ReportedNotFound =>
                 for {
-                  _    <- ctx.matchesAborted.update(_ + 1)
-                  rows <- ClubMatch.markAborted(matchId, Instant.now())
+                  _         <- ctx.matchesAborted.update(_ + 1)
+                  abortedAt <- Clock.instant
+                  rows      <- ClubMatch.markAborted(matchId, abortedAt)
                   msg =
                     if (rows == 0) s"    Refresh $matchId: reported not found but row vanished (no Aborted write)"
                     else s"    Refresh $matchId: aborted (reported not found)"
@@ -372,7 +381,7 @@ private[history] object HistoryProcessing {
           (ClubMatch.selectProcessedBodyHash(matchId) <&> ApiResponseBody.hashById(unchanged.bodyId)).flatMap {
             case (Some(marker), Some(hash)) if marker == hash =>
               ctx.refreshMatchUnchanged.update(_ + 1) *>
-                ClubMatch.updateFetchedAt(matchId, Instant.now()).unit
+                Clock.instant.flatMap(ClubMatch.updateFetchedAt(matchId, _)).unit
             case (_, hash) =>
               unchanged.getValue.flatMap(refreshSingleMatchWithBody(ctx, matchId, _, hash))
           },
@@ -407,8 +416,9 @@ private[history] object HistoryProcessing {
           resolvedIdOption = team2ClubIdOption
         )
 
+      fetchedAt <- Clock.instant
       clubMatch =
-        HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubIdOption, team2ClubIdOption)
+        HistoryBoardBuilder.buildClubMatchRow(matchId, dailyMatch, team1ClubIdOption, team2ClubIdOption, fetchedAt)
           .copy(processedBodyHash = newBodyHash)
 
       weAreTeam1: Option[Boolean] =
@@ -482,22 +492,8 @@ private[history] object HistoryProcessing {
 
             t1PidOption <- resolvePlayerId(ctx, t1Username, isOurTeam = weAreTeam1.contains(true))
             t2PidOption <- resolvePlayerId(ctx, t2Username, isOurTeam = weAreTeam1.contains(false))
-            _ <- ZIO.whenDiscard(t1PidOption.isEmpty) {
-              UnresolvedBoardPlayer.insert(
-                matchId = matchId,
-                board = boardNum,
-                isTeam1 = true,
-                username = t1Username
-              ).ignore
-            }
-            _ <- ZIO.whenDiscard(t2PidOption.isEmpty) {
-              UnresolvedBoardPlayer.insert(
-                matchId = matchId,
-                board = boardNum,
-                isTeam1 = false,
-                username = t2Username
-              ).ignore
-            }
+            _           <- trackUnresolvedBoardPlayer(matchId, boardNum, isTeam1 = true, t1Username, t1PidOption)
+            _           <- trackUnresolvedBoardPlayer(matchId, boardNum, isTeam1 = false, t2Username, t2PidOption)
 
             // Per-board fetch failures degrade to a board row with no API data; a systemic outage re-raises so the
             // match isn't persisted with dataless boards.
@@ -680,6 +676,18 @@ private[history] object HistoryProcessing {
 
   // === Helpers ===
 
+  /** Records a board player in `unresolved_board_player` when their username resolved to no player. */
+  private def trackUnresolvedBoardPlayer(
+    matchId: ClubMatchId,
+    board: Short,
+    isTeam1: Boolean,
+    username: Username,
+    resolvedIdOption: Option[PlayerId]
+  ): RIO[PostgresClient, Unit] =
+    ZIO.whenDiscard(resolvedIdOption.isEmpty) {
+      Clock.instant.flatMap(UnresolvedBoardPlayer.insert(matchId, board, isTeam1, username, _)).ignore
+    }
+
   /** Records a club slug in `unresolved_match_club` when team club URL resolution fails. */
   private def trackUnresolvedClub(
     matchId: ClubMatchId,
@@ -689,7 +697,7 @@ private[history] object HistoryProcessing {
   ): RIO[PostgresClient, Unit] =
     ZIO.whenDiscard(resolvedIdOption.isEmpty) {
       ZIO.foreachDiscard(teamUrl.path.segments.lastOption) { segment =>
-        UnresolvedMatchClub.insert(matchId, isTeam1, ClubSlug.wrap(segment)).ignore
+        Clock.instant.flatMap(UnresolvedMatchClub.insert(matchId, isTeam1, ClubSlug.wrap(segment), _)).ignore
       }
     }
 

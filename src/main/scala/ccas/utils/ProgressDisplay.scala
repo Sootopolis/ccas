@@ -189,8 +189,8 @@ final class ProgressDisplay private[utils] (
   // (`private[ProgressDisplay]`) so the layer's `withLoggerScoped` call can reach it without exposing the logger
   // to the rest of the package — production callers should only install it via `live`.
   //
-  // Note: `Instant.now()` reads the wall clock, not `Clock.instant`, so timestamps in tests under `TestClock` won't
-  // advance with `TestClock.adjust`. Acceptable for an interactive CLI formatter.
+  // Note: a logger is not an effect, so this one reads the wall clock rather than `Clock.instant`, and timestamps in
+  // tests under `TestClock` won't advance with `TestClock.adjust`. Acceptable for an interactive CLI formatter.
   // ---------------------------------------------------------------------------
 
   private[ProgressDisplay] val asZLogger: ZLogger[String, Any] = new ZLogger[String, Any] {
@@ -216,7 +216,10 @@ final class ProgressDisplay private[utils] (
             // An empty message spaces a report's sections, which a prefix would turn into a line of its own.
             val line =
               if (msg.isEmpty && cause.isEmpty) { "" }
-              else { ProgressDisplay.format(level, msg, Instant.now(), cause, spans, annotations) }
+              else {
+                val at = Instant.now() // scalafix:ok DisableSyntax.wallClock
+                ProgressDisplay.format(level, msg, at, cause, spans, annotations)
+              }
             logAboveBarsSync(sink, line)
           }
         } catch { case t: Throwable => t.printStackTrace(err) }

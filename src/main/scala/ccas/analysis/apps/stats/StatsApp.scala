@@ -2,7 +2,7 @@ package ccas.analysis.apps.stats
 
 import java.time.{Duration, Instant}
 
-import zio.{Chunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, Clock, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution}
 import ccas.analysis.apps.stats.StatsUtils.*
@@ -108,7 +108,7 @@ object StatsApp extends ZIOAppDefault {
     until: Instant
   ): RIO[PostgresClient, StatsResult] =
     for {
-      now = Instant.now()
+      now <- Clock.instant
       _ <- ZIO.whenDiscard(!since.isBefore(until)) {
         ZIO.fail(BadRequestException(s"--since must be before --until (got $since .. $until)"))
       }

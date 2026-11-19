@@ -149,34 +149,42 @@ object TestClubMatchSql extends ZIOSpecDefault {
   }
 
   private def testClubMatchSelectLatestActivity =
-    test("selectLatestActivityForClub returns max start_time across all matches; Registration counts as now") {
-      // Club A has matchFinished (Times.t0) and matchInProgress (Times.t1). Latest = t1.
-      // Club B has only matchFinished (t0). Latest = t0.
-      // Add a Registration match for clubB to verify it's treated as "now".
-      val matchRegistered = matchFinished.copy(
-        matchId = ClubMatchId(1003),
+    test(
+      "selectLatestActivityForClub returns max start_time across all matches; a Registration match counts as the " +
+        "instant given"
+    ) {
+      // Its own clubs and matches, so it reads nothing an earlier test wrote. Club C plays a finished match against D
+      // (t0) and one in progress (t1); a Registration match for D then counts as active at `now`.
+      val clubC = clubA.copy(clubId = ClubId(320), slug = ClubSlug("club-c"), name = "Club C")
+      val clubD = clubB.copy(clubId = ClubId(321), slug = ClubSlug("club-d"), name = "Club D")
+      val finished = matchFinished.copy(
+        matchId = ClubMatchId(1101),
+        team1ClubIdOption = Some(clubC.clubId),
+        team2ClubIdOption = Some(clubD.clubId)
+      )
+      val inProgress = matchInProgress.copy(matchId = ClubMatchId(1102), team1ClubIdOption = Some(clubC.clubId))
+      val registered = matchFinished.copy(
+        matchId = ClubMatchId(1103),
         status = ClubMatchStatus.Registration,
         startTime = None,
         endTime = None,
-        team1ClubIdOption = Some(clubB.clubId),
+        team1ClubIdOption = Some(clubD.clubId),
         team2ClubIdOption = None
       )
-      val before = Instant.now()
+      val now = Times.t4
       for {
-        // Without a registration match: max start_time
-        latestANoReg <- ClubMatch.selectLatestActivityForClub(clubA.clubId)
-        latestBNoReg <- ClubMatch.selectLatestActivityForClub(clubB.clubId)
-        // With a registration match for clubB: should jump to ~now
-        _          <- ClubMatch.upsert(matchRegistered)
-        latestBReg <- ClubMatch.selectLatestActivityForClub(clubB.clubId)
-        // Unknown club returns None
-        latestNone <- ClubMatch.selectLatestActivityForClub(ClubId(999))
-        // Cleanup
-        _ <- connectZIO(sql"DELETE FROM club_match WHERE match_id = 1003".update.run())
+        _            <- ZIO.foreachDiscard(List(clubC, clubD))(Club.upsert)
+        _            <- ZIO.foreachDiscard(List(finished, inProgress))(ClubMatch.upsert)
+        latestCNoReg <- ClubMatch.selectLatestActivityForClub(clubC.clubId, now)
+        latestDNoReg <- ClubMatch.selectLatestActivityForClub(clubD.clubId, now)
+        _            <- ClubMatch.upsert(registered)
+        latestDReg   <- ClubMatch.selectLatestActivityForClub(clubD.clubId, now)
+        latestNone   <- ClubMatch.selectLatestActivityForClub(ClubId(999), now)
+        _            <- connectZIO(sql"DELETE FROM club_match WHERE match_id IN (1101, 1102, 1103)".update.run())
       } yield assertTrue(
-        latestANoReg.contains(Times.t1),
-        latestBNoReg.contains(Times.t0),
-        latestBReg.exists(_.isAfter(before.minusSeconds(1))),
+        latestCNoReg.contains(Times.t1),
+        latestDNoReg.contains(Times.t0),
+        latestDReg.contains(now),
         latestNone.isEmpty
       )
     }
@@ -655,13 +663,15 @@ object TestClubMatchSql extends ZIOSpecDefault {
         matchId = ClubMatchId(1001),
         board = 1,
         isTeam1 = false,
-        username = Username("opp1")
+        username = Username("opp1"),
+        firstSeen = Times.t0
       )
       r2 <- UnresolvedBoardPlayer.insert(
         matchId = ClubMatchId(1001),
         board = 2,
         isTeam1 = true,
-        username = Username("opp2")
+        username = Username("opp2"),
+        firstSeen = Times.t0
       )
       all <- UnresolvedBoardPlayer.selectAll
     } yield assertTrue(
@@ -679,7 +689,8 @@ object TestClubMatchSql extends ZIOSpecDefault {
         matchId = ClubMatchId(1001),
         board = 1,
         isTeam1 = false,
-        username = Username("opp1-updated")
+        username = Username("opp1-updated"),
+        firstSeen = Times.t1
       )
     } yield assertTrue(r == 0)
   }
@@ -699,7 +710,12 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testUnresolvedMatchClubInsertAndSelect = test("UnresolvedMatchClub insert and selectAll") {
     for {
-      r1  <- UnresolvedMatchClub.insert(matchId = ClubMatchId(1001), isTeam1 = false, slug = ClubSlug("unknown-club"))
+      r1 <- UnresolvedMatchClub.insert(
+        matchId = ClubMatchId(1001),
+        isTeam1 = false,
+        slug = ClubSlug("unknown-club"),
+        firstSeen = Times.t0
+      )
       all <- UnresolvedMatchClub.selectAll
     } yield assertTrue(
       r1 == 1,
@@ -710,7 +726,12 @@ object TestClubMatchSql extends ZIOSpecDefault {
 
   private def testUnresolvedMatchClubDoNothing = test("UnresolvedMatchClub ON CONFLICT DO NOTHING") {
     for {
-      r <- UnresolvedMatchClub.insert(matchId = ClubMatchId(1001), isTeam1 = false, slug = ClubSlug("different-slug"))
+      r <- UnresolvedMatchClub.insert(
+        matchId = ClubMatchId(1001),
+        isTeam1 = false,
+        slug = ClubSlug("different-slug"),
+        firstSeen = Times.t1
+      )
     } yield assertTrue(r == 0)
   }
 

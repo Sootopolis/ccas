@@ -2,7 +2,7 @@ package ccas.utils.client
 
 import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
-import java.time.Instant
+import java.time.{Clock as JClock, Instant, ZoneOffset}
 
 import com.augustnagro.magnum.sql
 import zio.*
@@ -128,6 +128,31 @@ object TestChessComClientCaching extends ZIOSpecDefault {
           calls == 1, // only the first populate call hit the network
           s.requests == 1L,
           s.cacheHits == 1L
+        )
+      }
+    },
+    test("an entry stays Fresh until its max-age has passed on the app clock, then revalidates") {
+      val url    = URL.decode("http://test.example.com/api/cacheable/fresh-until-max-age").toOption.get
+      val stored = Instant.parse("2026-01-01T00:00:00Z")
+      // A fixed java.time clock rather than TestClock: its sleeps stay real, so the client's pacing still runs.
+      def at(instant: Instant) = Clock.ClockJava(JClock.fixed(instant, ZoneOffset.UTC))
+      ZIO.scoped {
+        for {
+          netCalls <- Ref.make(0)
+          (client, _, _) <- makeClient { _ =>
+            netCalls.getAndUpdate(_ + 1).map { n =>
+              if (n == 0) cacheable200(jsonBody, maxAge = Some(3600))
+              else Response(status = Status.NotModified)
+            }
+          }
+          _      <- ZIO.withClock(at(stored))(client.getResult[Payload](url))
+          within <- ZIO.withClock(at(stored.plusSeconds(3599)))(client.getResult[Payload](url))
+          after  <- ZIO.withClock(at(stored.plusSeconds(3601)))(client.getResult[Payload](url))
+          calls  <- netCalls.get
+        } yield assertTrue(
+          within.isInstanceOf[FetchResult.Fresh[?]],
+          after.isInstanceOf[FetchResult.Revalidated[?]],
+          calls == 2
         )
       }
     },

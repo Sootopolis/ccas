@@ -86,7 +86,14 @@ object TestHistorySeeding extends ZIOSpecDefault {
     ).unit
 
   private def seedUnresolved(username: Username): RIO[PostgresClient, Unit] =
-    UnresolvedBoardPlayer.insert(matchId = matchId, board = boardNum, isTeam1 = true, username = username).unit
+    UnresolvedBoardPlayer.insert(
+      matchId = matchId,
+      board = boardNum,
+      isTeam1 = true,
+      username = username,
+      firstSeen = t0
+    )
+      .unit
 
   private def seedPlayer(
     playerId: PlayerId,

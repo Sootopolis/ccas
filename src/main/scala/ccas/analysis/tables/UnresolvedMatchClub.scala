@@ -35,10 +35,15 @@ object UnresolvedMatchClub {
         .query[UnresolvedMatchClub].run().toList
     }
 
-  def insert(matchId: ClubMatchId, isTeam1: Boolean, slug: ClubSlug): ZIO[PostgresClient, SQLException, Int] =
+  def insert(
+    matchId: ClubMatchId,
+    isTeam1: Boolean,
+    slug: ClubSlug,
+    firstSeen: Instant
+  ): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO unresolved_match_club (match_id, is_team1, slug, first_seen)
-            VALUES ($matchId, $isTeam1, $slug, ${Instant.now()})
+            VALUES ($matchId, $isTeam1, $slug, $firstSeen)
             ON CONFLICT (match_id, is_team1) DO NOTHING""".update.run()
     }
 

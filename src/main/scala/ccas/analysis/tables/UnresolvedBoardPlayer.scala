@@ -41,11 +41,12 @@ object UnresolvedBoardPlayer {
     matchId: ClubMatchId,
     board: Short,
     isTeam1: Boolean,
-    username: Username
+    username: Username,
+    firstSeen: Instant
   ): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       sql"""INSERT INTO unresolved_board_player (match_id, board, is_team1, username, first_seen)
-            VALUES ($matchId, $board, $isTeam1, $username, ${Instant.now()})
+            VALUES ($matchId, $board, $isTeam1, $username, $firstSeen)
             ON CONFLICT (match_id, board, is_team1) DO NOTHING""".update.run()
     }
 

@@ -3,7 +3,7 @@ package ccas.analysis.apps.recruitment
 import java.time.{Duration, Instant}
 
 import com.augustnagro.magnum.sql
-import zio.{durationInt, Fiber, Promise, Ref, RIO, Scope, Semaphore, Trace, ZEnvironment, ZIO}
+import zio.{durationInt, Clock, Fiber, Promise, Ref, RIO, Scope, Semaphore, Trace, UIO, ZEnvironment, ZIO}
 import zio.http.*
 
 import ccas.analysis.apps.TestTimes
@@ -15,7 +15,6 @@ import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, ClientStatsAccumulator, TestChessComClientSupport}
 import ccas.utils.sql.{PostgresClient, TestDbCleanup}
-import ccas.utils.sql.DbCodecs.given
 
 object RecruitmentTestSupport {
 
@@ -372,6 +371,17 @@ object RecruitmentTestSupport {
   ): RIO[PostgresClient & BodyStore, ChessComClient] =
     TestChessComClientSupport.fakeClient(buildRoutes(responses, failures, notFound))
 
+  /** [[fakeChessComClient]], running `onProfile` with the username before it answers each player profile request. */
+  def fakeChessComClientOnProfile(
+    responses: Map[String, String],
+    onProfile: String => UIO[Unit]
+  ): RIO[PostgresClient & BodyStore, ChessComClient] = {
+    val profileRoute = Method.GET / "pub" / "player" / string("username") -> handler { (username: String, _: Request) =>
+      onProfile(username).as(responses.get(s"player/$username").fold(notFoundResponse)(Response.json(_)))
+    }
+    TestChessComClientSupport.fakeClient(buildRoutes(responses = responses, playerProfileOverride = Some(profileRoute)))
+  }
+
   /** A variant of fakeChessComClient where the Nth player profile request blocks. After `blockAfterN` successful player
     * profile fetches, the next fetch completes `reached` and then awaits `gate` before responding. This ensures exactly
     * `blockAfterN` candidates have had their profiles fetched (and thus fully evaluated, since concurrency = 1) before
@@ -475,12 +485,6 @@ object RecruitmentTestSupport {
       _          <- RecruitmentAlias.insert(RecruitmentAlias(clubId, "default", Instant.now(), criteriaId))
     } yield criteriaId
 
-  /** The database's clock. Use this (not `Instant.now()`) to stamp rows a `NOW()`-windowed query must match, so the
-    * row timestamp and the query predicate share one clock rather than risking JVM/DB skew at a day boundary.
-    */
-  def dbNow: RIO[PostgresClient, Instant] =
-    PostgresClient.connectZIO(sql"SELECT NOW()".query[Instant].run().head)
-
   def seedDb: RIO[PostgresClient, Unit] =
     for {
       // Clean up test data
@@ -565,6 +569,7 @@ object RecruitmentTestSupport {
     target: Int = 30
   ): RIO[ProgressDisplay & PostgresClient, List[Username]] =
     for {
+      now         <- Clock.instant
       clubMatches <- client.get[ApiClubMatches](ApiClubMatches.getUrl(clubSlug))
       targetMatchIds = (clubMatches.registered.map(_.`@id`) ++ clubMatches.inProgress.map(_.`@id`)).toSet
       formerMemberIds <-
@@ -572,7 +577,7 @@ object RecruitmentTestSupport {
         else ZIO.succeed(Set.empty[PlayerId])
       adminExcludedPlayerIds <-
         criteria.avoidAdminMinClubSize.fold(ZIO.succeed(Set.empty[PlayerId]))(
-          ClubAdmin.selectPlayerIdsForSizableClubs
+          ClubAdmin.selectPlayerIdsForSizableClubs(_, now)
         )
       discoveredOpponents <- Ref.make(Set.empty[Username])
       failedAdminSlugs    <- Ref.make(Set.empty[ClubSlug])
@@ -587,7 +592,7 @@ object RecruitmentTestSupport {
         formerMemberIds = formerMemberIds,
         adminExcludedPlayerIds = adminExcludedPlayerIds,
         excludedSlugs = excludedSlugs,
-        now = Instant.now(),
+        now = now,
         discoveredOpponents = discoveredOpponents,
         failedAdminSlugs = failedAdminSlugs
       )

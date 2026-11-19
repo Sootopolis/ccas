@@ -39,6 +39,9 @@ object PlayerName {
         .update.run()
     }
 
+  // Name windows take the database's clock, as `NameLock.acquire` stamps every later one, so they order with the
+  // claims that close them (ADR 0020).
+  // scalafix:off DisableSyntax.sqlClock
   /** Opens the name `player` stores for every player with no `player_name` row, from the migration instant as
     * [[ClubName.backfill]] does: nothing observed an earlier start (ADR 0016). Idempotent. A name another player is
     * already recorded holding is skipped rather than failing the boot, which leaves this player holding none.
@@ -50,6 +53,7 @@ object PlayerName {
             WHERE NOT EXISTS (SELECT 1 FROM player_name n WHERE n.player_id = p.player_id)
             ON CONFLICT DO NOTHING""".update.run()
     }
+  // scalafix:on DisableSyntax.sqlClock
 
   def selectPlayer(playerId: PlayerId): ZIO[PostgresClient, SQLException, List[PlayerName]] =
     connectZIO {

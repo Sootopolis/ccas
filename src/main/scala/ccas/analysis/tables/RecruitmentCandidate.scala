@@ -104,9 +104,15 @@ object RecruitmentCandidate {
             ORDER BY rc.evaluated_at DESC LIMIT 1""".query[RecruitmentCandidate].run().headOption
     }
 
-  def selectInvitedToday(clubId: ClubId, alias: String): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
+  /** `alias`'s invites from completed runs that started on the UTC day of `dayOf`. */
+  def selectInvitedToday(
+    clubId: ClubId,
+    alias: String,
+    dayOf: Instant
+  ): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
       val invited: CandidateOutcome = CandidateOutcome.Invited
+      val day                       = RecruitmentRun.UtcDay.of(dayOf)
       // Spans every run today, so a player invited in more than one run has multiple rows. DISTINCT ON keeps one
       // per player — the latest invite wins — and leads ORDER BY with player_id so the output stays ascending.
       sql"""SELECT DISTINCT ON (rc.player_id) $selectColsRc FROM recruitment_candidate rc
@@ -115,8 +121,7 @@ object RecruitmentCandidate {
               SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
             )
               AND rr.completed_at IS NOT NULL
-              AND rr.started_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-              AND rr.started_at < date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + INTERVAL '1 day'
+              AND rr.started_at >= ${day.start} AND rr.started_at < ${day.end}
               AND rc.outcome = $invited
             ORDER BY rc.player_id, rc.evaluated_at DESC, rc.run_id DESC"""
         .query[RecruitmentCandidate].run().toList

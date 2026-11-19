@@ -27,7 +27,7 @@ private[tables] enum NameLock(nameSpace: Space, wholeSpace: Space) {
       AdvisoryLock.acquireShared(wholeSpace, 0)
       AdvisoryLock.acquire(nameSpace, keys)
     }
-    sql"SELECT clock_timestamp()".query[Instant].run().head
+    sql"SELECT clock_timestamp()".query[Instant].run().head // scalafix:ok DisableSyntax.sqlClock
   }
 }
 

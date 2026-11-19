@@ -1,7 +1,8 @@
 package ccas.server.routes
 
-import java.time.{Instant, ZoneOffset}
+import java.time.ZoneOffset
 
+import zio.Clock
 import zio.http.*
 import zio.json.{DeriveJsonCodec, JsonCodec}
 
@@ -55,7 +56,7 @@ object BlacklistRoutes {
     Method.GET / "api" / "blacklist" -> handler { (req: Request) =>
       for {
         query <- ClubRequest.query(req)
-        now = Instant.now()
+        now   <- Clock.instant
         result <- ClubRequest.run(query) { club =>
           RecruitmentBlacklist.selectActiveByClub(club.clubId, now).map(_.map(BlacklistEntryResponse.fromEntry))
         }
@@ -64,7 +65,8 @@ object BlacklistRoutes {
     Method.POST / "api" / "blacklist" -> handler { (req: Request) =>
       for {
         body <- parseJsonBody[CreateBlacklistRequest](req)
-        expiresAt = body.months.map(m => Instant.now().atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
+        now  <- Clock.instant
+        expiresAt = body.months.map(m => now.atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
         result <- ClubRequest.run(body.club) { club =>
           BlacklistApp.addToBlacklist(club, body.usernames, body.reason, expiresAt).map(_.map(Username.unwrap))
         }

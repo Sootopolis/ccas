@@ -1,11 +1,12 @@
 package ccas.analysis.apps.ref
 
-import java.time.Instant
+import java.time.{Duration, Instant}
 import java.time.temporal.ChronoUnit
 
 import zio.Scope
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import RefUtils.RetryWindows
 import TestRefAppSupport.*
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
@@ -39,8 +40,33 @@ object TestRefAppSkipAndUpgrade extends ZIOSpecDefault {
     testWritesNotFoundSkipForPlayerWithCanonical404,
     testWritesApiErrorSkipForPlayerWithTransient404,
     testWritesNotFoundSkipForClubWithCanonical404,
-    testWritesApiErrorSkipForClubWithTransient404
+    testWritesApiErrorSkipForClubWithTransient404,
+    testClubSkipWindowFromInstantGiven,
+    testPlayerSkipWindowFromInstantGiven
   )
+
+  private val lastAttempted = Instant.parse("2026-01-01T00:00:00Z")
+  private val noDataLapses  = lastAttempted.plus(Duration.ofDays(RetryWindows.NoData))
+
+  private def testClubSkipWindowFromInstantGiven =
+    test("a club's skip holds inside its retry window and lapses after it, measured from the instant given") {
+      for {
+        _      <- seedDb
+        _      <- ClubRefSkip.upsert(ClubRefSkip(clubId0, RefSkipReason.NoData, None, lastAttempted))
+        inside <- RefApp.selectUnresolvedClubs(forceSkipped = false, noDataLapses.minusSeconds(1))
+        after  <- RefApp.selectUnresolvedClubs(forceSkipped = false, noDataLapses.plusSeconds(1))
+      } yield assertTrue(!inside.exists(_.clubId == clubId0), after.exists(_.clubId == clubId0))
+    }
+
+  private def testPlayerSkipWindowFromInstantGiven =
+    test("a player's skip holds inside its retry window and lapses after it, measured from the instant given") {
+      for {
+        _      <- seedDb
+        _      <- PlayerRefSkip.upsert(PlayerRefSkip(pid0, RefSkipReason.NoData, None, lastAttempted))
+        inside <- RefApp.selectUnresolvedPlayers(forceSkipped = false, noDataLapses.minusSeconds(1))
+        after  <- RefApp.selectUnresolvedPlayers(forceSkipped = false, noDataLapses.plusSeconds(1))
+      } yield assertTrue(!inside.exists(_.playerId == pid0), after.exists(_.playerId == pid0))
+    }
 
   private def testWritesNoDataSkipForPlayerWithNoMatchesAndNoTournaments =
     test("writes NoData skip for player with no matches and no tournaments") {

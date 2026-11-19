@@ -2,6 +2,7 @@ package ccas.analysis.tables
 
 import java.sql.SQLException
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 import com.augustnagro.magnum.*
 import zio.ZIO
@@ -29,6 +30,19 @@ final case class RecruitmentRun(
 ) derives DbCodec
 
 object RecruitmentRun {
+
+  /** The UTC day an instant falls on, as the bounds a run's `started_at` is compared with. A whole day is 24 hours
+    * here, where an interval added in SQL would follow the session's time zone across a clock change.
+    */
+  final case class UtcDay(start: Instant, end: Instant)
+
+  object UtcDay {
+    def of(instant: Instant): UtcDay = {
+      val start = instant.truncatedTo(ChronoUnit.DAYS)
+      UtcDay(start, start.plus(1, ChronoUnit.DAYS))
+    }
+  }
+
   private val selectCols = SqlLiteral(
     "run_id, club_id, criteria_id, trigger, started_at, completed_at, candidates_found, target, job_run_id"
   )
@@ -70,15 +84,16 @@ object RecruitmentRun {
         .query[RecruitmentRun].run().headOption
     }
 
-  def sumCandidatesFoundToday(clubId: ClubId, alias: String): ZIO[PostgresClient, SQLException, Int] =
+  /** Candidates found by `alias`'s completed runs that started on the UTC day of `dayOf`. */
+  def sumCandidatesFoundToday(clubId: ClubId, alias: String, dayOf: Instant): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
+      val day = UtcDay.of(dayOf)
       sql"""SELECT COALESCE(SUM(candidates_found), 0) FROM recruitment_run
             WHERE club_id = $clubId AND criteria_id IN (
               SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
             )
               AND completed_at IS NOT NULL
-              AND started_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-              AND started_at < date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + INTERVAL '1 day'"""
+              AND started_at >= ${day.start} AND started_at < ${day.end}"""
         .query[Int].run().headOption
     }.someOrFail(new SQLException("COALESCE query produced no rows"))
 

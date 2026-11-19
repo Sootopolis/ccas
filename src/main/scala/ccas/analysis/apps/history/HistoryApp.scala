@@ -2,7 +2,21 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{Chunk, ExitCode, NonEmptyChunk, Ref, RIO, Scope, Task, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{
+  Chunk,
+  Clock,
+  ExitCode,
+  NonEmptyChunk,
+  Ref,
+  RIO,
+  Scope,
+  Task,
+  URIO,
+  ZEnvironment,
+  ZIO,
+  ZIOAppArgs,
+  ZIOAppDefault
+}
 
 import HistoryUtils.*
 
@@ -171,8 +185,8 @@ object HistoryApp extends ZIOAppDefault {
       memberIds = rows.map(_.playerId).toSet ++ playedForClub
       memberNames <- PlayerName.selectCurrentNames(memberIds)
       _           <- HistoryPendingMatch.resetStatuses(clubId)
-      startedAt = Instant.now()
-      runId <- HistoryRun.insert(clubId, trigger, startedAt, jobRunIdOption)
+      startedAt   <- Clock.instant
+      runId       <- HistoryRun.insert(clubId, trigger, startedAt, jobRunIdOption)
       _ <- ZIO.logInfo(
         s"  Members: ${memberIds.size}, Processed matches: $processedCount, Queried members: ${queriedIds.size}"
       )
@@ -329,7 +343,7 @@ object HistoryApp extends ZIOAppDefault {
           memberSeed <- memberSeedRef.get
           seedStale  <- seedStaleRef.get
           membersSkipped = memberIds.size - memberSeed.queried - memberSeed.failed
-          completedAt    = Instant.now()
+          completedAt <- Clock.instant
           totalStats = waveStats.copy(
             membersQueried = memberSeed.queried,
             membersSkipped = membersSkipped,
@@ -383,7 +397,7 @@ object HistoryApp extends ZIOAppDefault {
     for {
       partialStats     <- HistoryProcessing.readStats(ctx, waveCount = 0, waveDetails = Nil)
       pendingRemaining <- HistoryPendingMatch.count(ctx.clubId)
-      completedAt = Instant.now()
+      completedAt      <- Clock.instant
       totalStats = partialStats.copy(
         membersQueried = memberSeed.queried,
         membersSkipped = membersSkipped,

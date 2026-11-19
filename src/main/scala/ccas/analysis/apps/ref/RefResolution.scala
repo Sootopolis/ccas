@@ -1,8 +1,6 @@
 package ccas.analysis.apps.ref
 
-import java.time.Instant
-
-import zio.{Promise, RIO, Task, ZIO}
+import zio.{Clock, Promise, RIO, Task, ZIO}
 import zio.http.URL
 
 import RefUtils.*
@@ -470,7 +468,7 @@ private[ref] object RefResolution {
     reason: RefSkipReason,
     detail: Option[String] = None
   ): RIO[PostgresClient, Unit] =
-    PlayerRefSkip.upsert(PlayerRefSkip(player.playerId, reason, detail, Instant.now())) *>
+    Clock.instant.flatMap(now => PlayerRefSkip.upsert(PlayerRefSkip(player.playerId, reason, detail, now))) *>
       ctx.playersSkippedNew.update(_ + 1)
 
   private def skipClub(
@@ -479,7 +477,7 @@ private[ref] object RefResolution {
     reason: RefSkipReason,
     detail: Option[String] = None
   ): RIO[PostgresClient, Unit] =
-    ClubRefSkip.upsert(ClubRefSkip(club.clubId, reason, detail, Instant.now())) *>
+    Clock.instant.flatMap(now => ClubRefSkip.upsert(ClubRefSkip(club.clubId, reason, detail, now))) *>
       ctx.clubsSkippedNew.update(_ + 1)
 
   // --- Upgrade: tournament ref → match ref ---

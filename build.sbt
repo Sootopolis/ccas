@@ -135,6 +135,8 @@ lazy val root = (project in file("."))
     ),
     // Without this, scalafmt checks the Compile and Test sources but not these rules.
     ScalafmtPlugin.scalafmtConfigSettings(ScalafixConfig),
+    // Test fixtures may read the wall clock, which `.scalafix.conf` refuses in src/main (#509).
+    Test / scalafixConfig := Some(file(".scalafix-test.conf")),
     // The launcher's copy of the two flags, and the only one that probes the JDK — it can meet a version neither
     // `.sdkmanrc` nor CI pins. See docs/adr/0018-every-jvm-carries-the-same-two-flags.md (#231).
     bashScriptExtraDefines ++= Seq(
