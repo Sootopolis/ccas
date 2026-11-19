@@ -22,7 +22,7 @@ private[cli] object CompletionCache {
   private val MaxRecentJobs = 50
 
   /** True when the clubs cache is absent or older than the TTL (any IO error is treated as "stale" → refresh). Reads
-    * the time via `Clock.instant` rather than `Instant.now()` so the TTL boundary is testable under `TestClock`.
+    * the time via `Clock.instant` rather than the wall clock so the TTL boundary is testable under `TestClock`.
     */
   def clubsStale(file: Path): UIO[Boolean] =
     Clock.instant.flatMap { now =>

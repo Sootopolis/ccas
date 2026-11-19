@@ -83,8 +83,8 @@ object RefApp extends ZIOAppDefault {
       playerStats <- resolvePlayers(ctx, forceSkipped)
       upgrade     <- upgradeTournamentPlayers(ctx, upgradeRefs)
       skipped     <- ctx.skippedPlayers.get
-      completedAt = Instant.now()
-      duration    = JDuration.between(startedAt, completedAt)
+      completedAt <- Clock.instant
+      duration = JDuration.between(startedAt, completedAt)
       _                   <- ZIO.logInfo(s"Duration: ${duration.display}")
       failed              <- ctx.failedUrls.get
       failedSrc           <- ctx.failedUrlSource.get
@@ -118,7 +118,8 @@ object RefApp extends ZIOAppDefault {
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefAppResolutionStats] = {
     val parallelism = ApiConcurrency.fiberCap(ctx.client)
     for {
-      clubs <- selectUnresolvedClubs(forceSkipped)
+      now   <- Clock.instant
+      clubs <- selectUnresolvedClubs(forceSkipped, now)
       _     <- ZIO.logInfo(s"Clubs without match ref: ${clubs.size}")
       _ <- ZIO.scoped {
         ProgressDisplay.foreachParProgress(clubs, parallelism)((n, total) => s"  Resolving clubs: $n/$total") { club =>
@@ -151,7 +152,8 @@ object RefApp extends ZIOAppDefault {
   ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefAppResolutionStats] = {
     val parallelism = ApiConcurrency.fiberCap(ctx.client)
     for {
-      players <- selectUnresolvedPlayers(forceSkipped)
+      now     <- Clock.instant
+      players <- selectUnresolvedPlayers(forceSkipped, now)
       _       <- ZIO.logInfo(s"Players without match ref: ${players.size}")
       _ <- ZIO.scoped {
         ProgressDisplay.foreachParProgress(players, parallelism)((n, total) => s"  Resolving players: $n/$total") {
@@ -196,7 +198,10 @@ object RefApp extends ZIOAppDefault {
   // Both read the name held now, not the display cache: resolution fetches under it and matches the board
   // by it, and a cached name may belong to whoever took it (ADR 0016). Holding none, a subject waits.
 
-  private def selectUnresolvedPlayers(forceSkipped: Boolean): RIO[PostgresClient, List[UnresolvedPlayer]] =
+  private[ref] def selectUnresolvedPlayers(
+    forceSkipped: Boolean,
+    now: Instant
+  ): RIO[PostgresClient, List[UnresolvedPlayer]] =
     if (forceSkipped) {
       connectZIO {
         sql"""SELECT n.player_id, n.username
@@ -207,7 +212,7 @@ object RefApp extends ZIOAppDefault {
           .run().toList
       }
     } else {
-      val c = RetryWindows.allCutoffs(Instant.now())
+      val c = RetryWindows.allCutoffs(now)
       connectZIO {
         sql"""SELECT n.player_id, n.username
               FROM player_name n
@@ -224,7 +229,10 @@ object RefApp extends ZIOAppDefault {
       }
     }
 
-  private def selectUnresolvedClubs(forceSkipped: Boolean): RIO[PostgresClient, List[UnresolvedClub]] =
+  private[ref] def selectUnresolvedClubs(
+    forceSkipped: Boolean,
+    now: Instant
+  ): RIO[PostgresClient, List[UnresolvedClub]] =
     if (forceSkipped) {
       connectZIO {
         sql"""SELECT n.club_id, n.slug
@@ -233,7 +241,7 @@ object RefApp extends ZIOAppDefault {
               WHERE n.until IS NULL AND cmr.club_id IS NULL""".query[UnresolvedClub].run().toList
       }
     } else {
-      val c = RetryWindows.allCutoffs(Instant.now())
+      val c = RetryWindows.allCutoffs(now)
       connectZIO {
         sql"""SELECT n.club_id, n.slug
               FROM club_name n

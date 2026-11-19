@@ -98,8 +98,9 @@ object JobRun {
              WHERE id = $id""".update.run()
     }
 
-  // `completedAt` is supplied by the caller (from `Clock.instant`) rather than SQL `NOW()` so every job timestamp comes
-  // from the one testable app clock — consistent with `startedAt` / `updateStatus`, and skew-free against the DB host.
+  // `completedAt` is supplied by the caller (from `Clock.instant`) rather than the database's clock so every job
+  // timestamp comes from the one testable app clock — consistent with `startedAt` / `updateStatus`, and skew-free
+  // against the DB host.
   def markOrphansAsFailed(completedAt: Instant): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
       val failed  = JobRunStatus.Failed

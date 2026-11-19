@@ -2,7 +2,7 @@ package ccas.analysis.apps.stats
 
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertTrue, Spec, TestAspect, TestClock, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, ClubMatch, ClubMatchBoard, ClubMatchGame, Player, Tables}
 import ccas.api.misc.enums.*
@@ -20,16 +20,19 @@ object TestStatsApp extends ZIOSpecDefault {
     testMemberStatsMatchesButNoBoards,
     testPlayerOfPeriodFilters,
     testPlayerOfPeriodMatchCount,
-    testPlayerOfPeriodInvertedRange
+    testPlayerOfPeriodInvertedRange,
+    testPlayerOfPeriodDataLag
   ).provideShared(
     FreshSchemaLayer(schema = "test_stats_app", onInit = Tables.ensureTables)
-  ) @@ TestAspect.sequential
+  ) @@ TestAspect.sequential @@ TestAspect.before(TestClock.setTime(Times.now))
 
   private object Times {
     val t0: Instant = LocalDateTime.of(2025, 6, 1, 0, 0).toInstant(ZoneOffset.UTC)
     val t1: Instant = t0.plus(Duration.ofDays(30))
     val t2: Instant = t0.plus(Duration.ofDays(60))
     val t3: Instant = t0.plus(Duration.ofDays(90))
+    // The app clock in every test, later than any period one asks about.
+    val now: Instant = t0.plus(Duration.ofDays(120))
   }
 
   private val clubId   = ClubId(100)
@@ -225,4 +228,17 @@ object TestStatsApp extends ZIOSpecDefault {
       exit <- StatsApp.playerOfPeriod(clubId, Times.t2, Times.t0).exit
     } yield assertTrue(exit.isFailure)
   }
+
+  private def testPlayerOfPeriodDataLag =
+    test("playerOfPeriod refuses an until less than 12 hours before the app clock's now") {
+      for {
+        _       <- TestClock.setTime(Times.t2.plus(Duration.ofHours(11)))
+        tooSoon <- StatsApp.playerOfPeriod(clubId, Times.t0, Times.t2).either
+        _       <- TestClock.setTime(Times.t2.plus(Duration.ofHours(13)))
+        lagged  <- StatsApp.playerOfPeriod(clubId, Times.t0, Times.t2).either
+      } yield assertTrue(
+        tooSoon.left.exists(_.getMessage.startsWith("--until must be at least 12 hours before now")),
+        lagged.isRight
+      )
+    }
 }

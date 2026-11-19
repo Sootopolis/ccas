@@ -5,7 +5,7 @@ import java.time.temporal.ChronoUnit
 
 import zio.ZIO
 import zio.json.*
-import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+import zio.test.{assertTrue, Spec, TestAspect, TestClock, ZIOSpecDefault}
 
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.{Player, PlayerName, PlayerSnapshot, Tables}
@@ -108,6 +108,8 @@ object TestPlayerUpdater extends ZIOSpecDefault {
   private def testReconcileTakesBackLastName =
     test("reconcile gives a player holding no name the name it is observed under, even the one it lost") {
       for {
+        // reconcile observes at the app clock's now, which has to come after the rows it reconciles against.
+        _ <- TestClock.setTime(Times.t1)
         _ <- Player.insert(Player(pidA, Times.t0, Username("bob"), PlayerStatusCategory.Active, None, Times.t0))
         _ <- Player.insert(Player(pidB, Times.t0, Username("bob"), PlayerStatusCategory.Active, None, Times.t0))
         observed <- ZIO.fromEither(apiPlayerJson(pidA.value, "bob").fromJson[ApiPlayer])

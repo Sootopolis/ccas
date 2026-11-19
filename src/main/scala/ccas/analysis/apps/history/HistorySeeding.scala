@@ -1,8 +1,6 @@
 package ccas.analysis.apps.history
 
-import java.time.Instant
-
-import zio.{Chunk, Ref, RIO, ZIO}
+import zio.{Chunk, Clock, Ref, RIO, ZIO}
 
 import HistoryUtils.*
 
@@ -247,7 +245,7 @@ private[history] object HistorySeeding {
 
       // For members skipped via shared dedup, still record HistoryMemberQuery for this club
       _ <- ZIO.foreachDiscard(sharedSkipped) { case (playerId, _) =>
-        HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
+        stampQueried(List(clubId), playerId)
       }
 
       counterRef       <- Ref.make(0)
@@ -367,13 +365,14 @@ private[history] object HistorySeeding {
     primaryClubId: ClubId,
     otherClubs: List[(ClubSlug, ClubId)],
     playerId: PlayerId
-  ): RIO[PostgresClient, Unit] = {
-    val now = Instant.now()
-    HistoryMemberQuery.upsert(HistoryMemberQuery(primaryClubId, playerId, now)) *>
-      ZIO.foreachDiscard(otherClubs) { case (_, otherClubId) =>
-        HistoryMemberQuery.upsert(HistoryMemberQuery(otherClubId, playerId, now))
-      }
-  }
+  ): RIO[PostgresClient, Unit] =
+    stampQueried(primaryClubId :: otherClubs.map(_._2), playerId)
+
+  /** Records that `playerId`'s matches were queried for each of `clubIds`, all as of one instant. */
+  private def stampQueried(clubIds: List[ClubId], playerId: PlayerId): RIO[PostgresClient, Unit] =
+    Clock.instant.flatMap { now =>
+      ZIO.foreachDiscard(clubIds)(clubId => HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, now)))
+    }
 
   private def seedAndStampAllClubs(
     primaryClubId: ClubId,
@@ -388,11 +387,11 @@ private[history] object HistorySeeding {
     val allMatches = playerMatches.finished ++ playerMatches.inProgress ++ playerMatches.registered
     for {
       primary <- seedMatchesFromList(primaryClubId, primarySlug, allMatches, primaryExcludeMatchIds)
-      _       <- HistoryMemberQuery.upsert(HistoryMemberQuery(primaryClubId, playerId, Instant.now()))
+      _       <- stampQueried(List(primaryClubId), playerId)
       _ <- ZIO.foreachDiscard(otherClubs) { case (otherSlug, otherClubId) =>
         fanoutExcludeIds(otherClubId, includeFinished, sc).flatMap { otherExclude =>
           seedMatchesFromList(otherClubId, otherSlug, allMatches, otherExclude)
-        } *> HistoryMemberQuery.upsert(HistoryMemberQuery(otherClubId, playerId, Instant.now()))
+        } *> stampQueried(List(otherClubId), playerId)
       }
     } yield primary
   }
@@ -429,9 +428,7 @@ private[history] object HistorySeeding {
     excludeMatchIds: Set[ClubMatchId],
     unchangedCounter: Ref[Int]
   ): RIO[PostgresClient, Int] = {
-    // `def` not `val` so `Instant.now()` is captured when the stamp actually runs (post-fetch / post-seed),
-    // matching the original `HistoryMemberQuery.upsert(... Instant.now())` call inside the for-comprehension.
-    def stamp = HistoryMemberQuery.upsert(HistoryMemberQuery(clubId, playerId, Instant.now()))
+    val stamp = stampQueried(List(clubId), playerId)
     def fetch(uname: Username): RIO[PostgresClient, Int] =
       client.getResult[ApiPlayerMatches](ApiPlayerMatches.getUrl(uname)).flatMap {
         _.foldPresentZIO(

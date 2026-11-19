@@ -3,7 +3,7 @@ package ccas.analysis.apps
 import java.sql.SQLException
 import java.time.Instant
 
-import zio.ZIO
+import zio.{Clock, ZIO}
 
 import ccas.analysis.tables.{Player, PlayerName, PlayerSnapshot}
 import ccas.api.misc.enums.PlayerStatusCategory
@@ -50,18 +50,19 @@ object PlayerUpdater {
     * update, no-op, or insert-on-conflict no-op).
     */
   def reconcile(apiPlayer: ApiPlayer): ZIO[PostgresClient, SQLException, Boolean] = {
-    val now            = Instant.now()
     val statusCategory = apiPlayer.status.category
-    Player.selectIdForUpdate(apiPlayer.playerId).flatMap {
-      case Some(existing) =>
-        updateIfDrifted(existing, apiPlayer.username, statusCategory, apiPlayer.title, now).as(false)
+    Clock.instant.flatMap { now =>
+      Player.selectIdForUpdate(apiPlayer.playerId).flatMap {
+        case Some(existing) =>
+          updateIfDrifted(existing, apiPlayer.username, statusCategory, apiPlayer.title, now).as(false)
 
-      case None =>
-        val since = if (statusCategory == PlayerStatusCategory.Active) { now }
-        else { apiPlayer.lastOnlineAt }
-        Player.insertIfNew(
-          Player(apiPlayer.playerId, apiPlayer.joinedAt, apiPlayer.username, statusCategory, apiPlayer.title, since)
-        ).map(_ > 0)
+        case None =>
+          val since = if (statusCategory == PlayerStatusCategory.Active) { now }
+          else { apiPlayer.lastOnlineAt }
+          Player.insertIfNew(
+            Player(apiPlayer.playerId, apiPlayer.joinedAt, apiPlayer.username, statusCategory, apiPlayer.title, since)
+          ).map(_ > 0)
+      }
     }
   }
 }

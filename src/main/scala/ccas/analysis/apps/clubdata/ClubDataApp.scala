@@ -2,7 +2,7 @@ package ccas.analysis.apps.clubdata
 
 import java.time.{Duration, Instant}
 
-import zio.{Chunk, Ref, RIO, Scope, Task, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, Clock, Ref, RIO, Scope, Task, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution, ClubSlugRenameResolver}
 import ccas.analysis.apps.ClubSlugRenameResolver.ResolvedClub
@@ -95,18 +95,19 @@ object ClubDataApp extends ZIOAppDefault {
   private def refreshEligible(
     clubs: List[Club],
     minAgeHours: Option[Int]
-  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] = {
-    val eligible = minAgeHours match {
-      case None => clubs
-      case Some(hours) =>
-        val cutoff = Instant.now().minus(Duration.ofHours(hours.toLong))
-        clubs.filter(_.fetchedAt.forall(_.isBefore(cutoff)))
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] =
+    Clock.instant.flatMap { now =>
+      val eligible = minAgeHours match {
+        case None => clubs
+        case Some(hours) =>
+          val cutoff = now.minus(Duration.ofHours(hours.toLong))
+          clubs.filter(_.fetchedAt.forall(_.isBefore(cutoff)))
+      }
+      val skipped = clubs.size - eligible.size
+      ZIO.whenDiscard(skipped > 0) {
+        ZIO.logInfo(s"[ClubData] --min-age filter: skipping $skipped recently-refreshed clubs")
+      } *> refreshClubs(eligible)
     }
-    val skipped = clubs.size - eligible.size
-    ZIO.whenDiscard(skipped > 0) {
-      ZIO.logInfo(s"[ClubData] --min-age filter: skipping $skipped recently-refreshed clubs")
-    } *> refreshClubs(eligible)
-  }
 
   private def refreshClubs(clubs: List[Club]): RIO[ProgressDisplay & ChessComClient & PostgresClient, RefreshResult] =
     ZIO.scoped {
@@ -179,7 +180,8 @@ object ClubDataApp extends ZIOAppDefault {
       allAdminIds <- ClubAdminResolver.resolveAndPersistAdmins(client, club.clubId, adminUsernames, existingAdminIds)
       _           <- logAdminDiff(club, existingAdminIds, allAdminIds)
       // Must remain the last step: --min-age relies on fetched_at being stamped only on full success.
-      _ <- Club.updateFetchedAt(club.clubId, Instant.now())
+      fetchedAt <- Clock.instant
+      _         <- Club.updateFetchedAt(club.clubId, fetchedAt)
     } yield ClubResult(
       adminCount = allAdminIds.size,
       failed = false,
@@ -265,12 +267,11 @@ object ClubDataApp extends ZIOAppDefault {
     client: ChessComClient,
     club: Club,
     currentNameOption: Option[ClubSlug]
-  ): RIO[ProgressDisplay & PostgresClient, Unit] = {
-    val now               = Instant.now()
+  ): RIO[ProgressDisplay & PostgresClient, Unit] = Clock.instant.flatMap { now =>
     val skipCutoff        = now.minus(ClubAdmin.ApiSkipThreshold)
     val cachedFreshEnough = club.latestMatchAt.exists(_.isAfter(skipCutoff))
-    ZIO.unlessDiscard(cachedFreshEnough) {
-      ClubMatch.selectLatestActivityForClub(club.clubId).flatMap { dbLatest =>
+    ZIO.whenDiscard(!cachedFreshEnough) {
+      ClubMatch.selectLatestActivityForClub(club.clubId, now).flatMap { dbLatest =>
         val dbFreshEnough = dbLatest.exists(_.isAfter(skipCutoff))
         if (dbFreshEnough) Club.updateLatestMatchAt(club.clubId, dbLatest).unit
         else {

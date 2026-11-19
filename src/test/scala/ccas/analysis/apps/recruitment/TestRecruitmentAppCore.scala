@@ -1,9 +1,12 @@
 package ccas.analysis.apps.recruitment
 
-import java.time.{Duration, Instant}
+import java.time.{Clock as JClock, Duration, Instant, LocalDateTime, OffsetDateTime, ZoneOffset}
+import java.time.temporal.ChronoUnit
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 import com.augustnagro.magnum.sql
-import zio.{ZIO, ZLayer}
+import zio.{Clock, Scheduler, Trace, UIO, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
 import ccas.analysis.apps.NamedClub
@@ -13,7 +16,7 @@ import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, Elo, PlayerId, Use
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.BodyStore
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
-import ccas.utils.sql.PostgresClient.connectZIO
+import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 
 object TestRecruitmentAppCore extends ZIOSpecDefault {
 
@@ -191,9 +194,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         _          <- seedPlayer(pid1)
         _          <- seedPlayer(pid2)
         criteriaId <- seedCriteria(makeCriteria()) // seeds alias "default" -> criteriaId
-        // Today-window query stamps runs off the DB clock (not Instant.now()) so the row timestamps and the NOW()
-        // predicate share one clock.
-        nowT <- dbNow
+        nowT    = Instant.parse("2026-11-18T12:00:00Z")
         earlier = nowT.minusSeconds(120)
         // Two completed runs today for the same club/alias.
         runA <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, nowT, None, None)
@@ -213,7 +214,7 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
           RecruitmentCandidate(runA, pid1, earlier, CandidateOutcome.Invited, None, None)
         )
         _ <- RecruitmentCandidate.insert(RecruitmentCandidate(runB, pid2, nowT, CandidateOutcome.Invited, None, None))
-        invited <- RecruitmentCandidate.selectInvitedToday(clubId, "default")
+        invited <- RecruitmentCandidate.selectInvitedToday(clubId, "default", nowT)
         pid0Row = invited.find(_.playerId == pid0)
       } yield assertTrue(
         // one row per player, ascending by player_id (pid0 not duplicated)
@@ -221,6 +222,40 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
         // surviving pid0 row is the later-evaluated one, from run B
         pid0Row.exists(_.runId == runB)
       )
+    },
+    // 29 March 2026 is 23 hours long in Europe/London. A day bound added in SQL follows the session's zone, so with the
+    // session set to London it would drop the run at 23:30 UTC.
+    test(
+      "sumCandidatesFoundToday and selectInvitedToday count only runs started on the UTC day of the instant given, " +
+        "on a clock-change day too"
+    ) {
+      val now      = Instant.parse("2026-03-29T12:00:00Z")
+      val midnight = Instant.parse("2026-03-29T00:00:00Z")
+      // A completed run that found `found` candidates and invited `invited`.
+      def completedRun(criteriaId: Long, startedAt: Instant, found: Int, invited: PlayerId) =
+        for {
+          runId <- RecruitmentRun.insert(clubId, criteriaId, RunTrigger.Cli, startedAt, None, None)
+          _ <- RecruitmentRun.update(
+            RecruitmentRun(runId, clubId, criteriaId, RunTrigger.Cli, startedAt, Some(startedAt), found, None, None)
+          )
+          _ <- RecruitmentCandidate.insert(
+            RecruitmentCandidate(runId, invited, startedAt, CandidateOutcome.Invited, None, None)
+          )
+        } yield ()
+      for {
+        _          <- seedDb
+        _          <- ZIO.foreachDiscard(List(pid0, pid1, pid2, pid3))(seedPlayer)
+        criteriaId <- seedCriteria(makeCriteria())
+        _          <- completedRun(criteriaId, midnight.minusNanos(1000), found = 1, invited = pid0)
+        _          <- completedRun(criteriaId, midnight, found = 2, invited = pid1)
+        _ <- completedRun(criteriaId, midnight.plus(Duration.ofMinutes(23 * 60 + 30)), found = 4, invited = pid2)
+        _ <- completedRun(criteriaId, midnight.plus(Duration.ofDays(1)), found = 8, invited = pid3)
+        (found, invited) <- withTransaction {
+          connectZIO(sql"SET LOCAL TIME ZONE 'Europe/London'".update.run()) *>
+            (RecruitmentRun.sumCandidatesFoundToday(clubId, "default", now) <*>
+              RecruitmentCandidate.selectInvitedToday(clubId, "default", now))
+        }
+      } yield assertTrue(found == 6, invited.map(_.playerId) == List(pid1, pid2))
     },
     test("CandidateOutcome enum round-trip for all variants") {
       val enumPids = CandidateOutcome.values.toList.zipWithIndex.map((_, i) => PlayerId.wrap(250L + i))
@@ -472,38 +507,45 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
       )
     },
     test("--cumulative: Today's Total lists each of today's invites once, this run's included") {
-      def responses(candidate: String, playerId: Long) = Map(
-        s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
-        s"club/$clubSlug/members" -> apiClubMembersJson(List(("existing", Times.t0.getEpochSecond))),
-        "club/source-club"        -> apiClubJson(sourceClubId.value, "source-club"),
-        "club/source-club/members" -> apiClubMembersJson(
-          List(("existing", Times.t0.getEpochSecond), (candidate, Times.t0.getEpochSecond))
-        ),
-        "player/existing"    -> apiPlayerJson(199, "existing"),
-        s"player/$candidate" -> apiPlayerJson(playerId, candidate)
-      )
       for {
         _       <- seedDb
         _       <- seedCriteria(makeCriteria())
-        clientA <- fakeChessComClient(responses("candidate-a", 200))
-        _ <- runRecruit(
-          clientA,
-          sourceClubs = List(ClubSlug("source-club")),
-          target = Some(3),
-          cumulative = true
-        )
-        clientB <- fakeChessComClient(responses("candidate-b", 201))
-        runB <- runRecruit(
-          clientB,
-          sourceClubs = List(ClubSlug("source-club")),
-          target = Some(3),
-          cumulative = true
-        )
+        clientA <- fakeChessComClient(cumulativeResponses("candidate-a", 200))
+        clientB <- fakeChessComClient(cumulativeResponses("candidate-b", 201))
+        // Both runs on one day, pinned so the suite running across midnight can't split them.
+        runB <- ZIO.withClock(SettableClock(new AtomicReference(Instant.parse("2026-11-18T12:00:00Z")))) {
+          runRecruit(clientA, sourceClubs = List(ClubSlug("source-club")), target = Some(3), cumulative = true) *>
+            runRecruit(clientB, sourceClubs = List(ClubSlug("source-club")), target = Some(3), cumulative = true)
+        }
         logged <- ZTestLogger.logOutput.map(_.map(_.message()))
         todaysTotal = logged.dropWhile(!_.startsWith("=== Today's Total"))
       } yield assertTrue(
         // Run A's find counts toward the target, leaving run B two to find.
         runB.target.contains(2),
+        todaysTotal.headOption.contains("=== Today's Total: 2 ==="),
+        todaysTotal.drop(1).takeWhile(_.startsWith("  ")) == List("  candidate-a", "  candidate-b")
+      )
+    }.provideSomeLayer[PostgresClient & BodyStore & ProgressDisplay](ZTestLogger.default),
+    test("--cumulative: a run that crosses midnight lists its own invites under the day it started") {
+      val clockRef      = new AtomicReference(Instant.parse("2026-11-18T23:58:00Z"))
+      val afterMidnight = Instant.parse("2026-11-19T00:01:00Z")
+      for {
+        _       <- seedDb
+        _       <- seedCriteria(makeCriteria())
+        clientA <- fakeChessComClient(cumulativeResponses("candidate-a", 200))
+        // Run B evaluates its candidate after midnight, so it commits on the next day.
+        clientB <- fakeChessComClientOnProfile(
+          cumulativeResponses("candidate-b", 201),
+          username => ZIO.succeed(if (username == "candidate-b") { clockRef.set(afterMidnight) })
+        )
+        _ <- ZIO.withClock(SettableClock(clockRef)) {
+          runRecruit(clientA, sourceClubs = List(ClubSlug("source-club")), target = Some(3), cumulative = true) *>
+            ZIO.succeed(clockRef.set(Instant.parse("2026-11-18T23:59:00Z"))) *>
+            runRecruit(clientB, sourceClubs = List(ClubSlug("source-club")), target = Some(3), cumulative = true)
+        }
+        logged <- ZTestLogger.logOutput.map(_.map(_.message()))
+        todaysTotal = logged.dropWhile(!_.startsWith("=== Today's Total"))
+      } yield assertTrue(
         todaysTotal.headOption.contains("=== Today's Total: 2 ==="),
         todaysTotal.drop(1).takeWhile(_.startsWith("  ")) == List("  candidate-a", "  candidate-b")
       )
@@ -812,4 +854,31 @@ object TestRecruitmentAppCore extends ZIOSpecDefault {
       )
     }
   )
+
+  private def cumulativeResponses(candidate: String, playerId: Long) = Map(
+    s"club/$clubSlug"         -> apiClubJson(clubId.value, clubSlug.value),
+    s"club/$clubSlug/members" -> apiClubMembersJson(List(("existing", Times.t0.getEpochSecond))),
+    "club/source-club"        -> apiClubJson(sourceClubId.value, "source-club"),
+    "club/source-club/members" -> apiClubMembersJson(
+      List(("existing", Times.t0.getEpochSecond), (candidate, Times.t0.getEpochSecond))
+    ),
+    "player/existing"    -> apiPlayerJson(199, "existing"),
+    s"player/$candidate" -> apiPlayerJson(playerId, candidate)
+  )
+
+  // An app clock a test sets by hand. Elapsed time stays live: the client times its exchanges and paces its requests
+  // with `nanoTime` and `currentTime`, and a jump there would read as a slow response.
+  private final case class SettableClock(ref: AtomicReference[Instant]) extends Clock {
+    def instant(implicit trace: Trace): UIO[Instant]                = ZIO.succeed(ref.get)
+    def currentDateTime(implicit trace: Trace): UIO[OffsetDateTime] = instant.map(_.atOffset(ZoneOffset.UTC))
+    def localDateTime(implicit trace: Trace): UIO[LocalDateTime] =
+      instant.map(LocalDateTime.ofInstant(_, ZoneOffset.UTC))
+    def javaClock(implicit trace: Trace): UIO[JClock]                    = Clock.ClockLive.javaClock
+    def currentTime(unit: => TimeUnit)(implicit trace: Trace): UIO[Long] = Clock.ClockLive.currentTime(unit)
+    def currentTime(unit: => ChronoUnit)(implicit trace: Trace, d: DummyImplicit): UIO[Long] =
+      Clock.ClockLive.currentTime(unit)
+    def nanoTime(implicit trace: Trace): UIO[Long]                         = Clock.ClockLive.nanoTime
+    def scheduler(implicit trace: Trace): UIO[Scheduler]                   = Clock.ClockLive.scheduler
+    def sleep(duration: => zio.Duration)(implicit trace: Trace): UIO[Unit] = Clock.ClockLive.sleep(duration)
+  }
 }

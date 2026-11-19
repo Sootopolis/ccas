@@ -38,6 +38,9 @@ object ClubName {
       sql"CREATE UNIQUE INDEX IF NOT EXISTS club_name_current ON club_name (slug) WHERE until IS NULL".update.run()
     }
 
+  // Name windows take the database's clock, as `NameLock.acquire` stamps every later one, so they order with the
+  // claims that close them (ADR 0020).
+  // scalafix:off DisableSyntax.sqlClock
   /** Opens a current name for every club that has no `club_name` row at all — the first boot after the table lands,
     * and any club a pre-`club_name` binary inserted since. A club that has held a name and holds none now has rows
     * already, so it is left holding none. Idempotent.
@@ -49,6 +52,7 @@ object ClubName {
             WHERE NOT EXISTS (SELECT 1 FROM club_name n WHERE n.club_id = c.club_id)
             ON CONFLICT DO NOTHING""".update.run()
     }
+  // scalafix:on DisableSyntax.sqlClock
 
   def selectClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[ClubName]] =
     connectZIO {

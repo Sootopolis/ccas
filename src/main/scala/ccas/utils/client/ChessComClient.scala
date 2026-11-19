@@ -102,8 +102,8 @@ final class ChessComClient(
         (e.getClass.getSimpleName, Option(e.getMessage), e.responseBody, logUnreadable(url, e))
       case other => (other.getClass.getSimpleName, Option(other.getMessage), None, ZIO.unit)
     }
-    logIt *> ApiFetchFailure
-      .insert(ApiFetchFailure(Instant.now(), url.encode, errorType, msg, body))
+    logIt *> Clock.instant
+      .flatMap(failedAt => ApiFetchFailure.insert(ApiFetchFailure(failedAt, url.encode, errorType, msg, body)))
       .provideEnvironment(ZEnvironment(pgClient, bodyStore))
       .tapError(dbErr => ZIO.logWarning(s"Failed to record api_fetch_failure for ${url.encode}: ${dbErr.safeMessage}"))
       .ignore
@@ -225,17 +225,19 @@ final class ChessComClient(
     val validators = extractValidators(response)
     val touchEffect =
       ZIO.whenDiscard(cacheWrites) {
-        ApiResponseCache
-          .touch(
-            url = url.encode,
-            fetchedAt = Instant.now(),
-            etag = validators.etag,
-            lastModified = validators.lastModified,
-            maxAgeUpdate = maxAgeUpdate,
-            contentType = validators.contentType
-          )
-          .provideEnvironment(ZEnvironment(pgClient))
-          .unit
+        Clock.instant.flatMap { fetchedAt =>
+          ApiResponseCache
+            .touch(
+              url = url.encode,
+              fetchedAt = fetchedAt,
+              etag = validators.etag,
+              lastModified = validators.lastModified,
+              maxAgeUpdate = maxAgeUpdate,
+              contentType = validators.contentType
+            )
+            .provideEnvironment(ZEnvironment(pgClient))
+            .unit
+        }
       }
     // `incCacheRevalidation` fires before `touchEffect` on purpose: the stat reports Chess.com API load (a 304 was
     // received), not DB-write success. A failed `touch` shouldn't blank the load attribution. Asymmetric with
@@ -276,17 +278,19 @@ final class ChessComClient(
     val upsertEffect: Task[Option[ApiResponseBodyId]] =
       if (!cacheWrites || directives.noStore) ZIO.none
       else
-        ApiResponseCache
-          .upsertWithBody(
-            url = url.encode,
-            body = string,
-            etag = validators.etag,
-            lastModified = validators.lastModified,
-            maxAgeSeconds = effectiveMaxAge,
-            contentType = validators.contentType,
-            fetchedAt = Instant.now()
-          )
-          .provideEnvironment(ZEnvironment(pgClient, bodyStore))
+        Clock.instant.flatMap { fetchedAt =>
+          ApiResponseCache
+            .upsertWithBody(
+              url = url.encode,
+              body = string,
+              etag = validators.etag,
+              lastModified = validators.lastModified,
+              maxAgeSeconds = effectiveMaxAge,
+              contentType = validators.contentType,
+              fetchedAt = fetchedAt
+            )
+            .provideEnvironment(ZEnvironment(pgClient, bodyStore))
+        }
     val decodeLazy = ZIO.fromEither(jsonDecoder.decodeJson(string)).mapError(JsonDecodingException(_, Some(string)))
     for {
       _               <- logEtagParseMiss(response)
@@ -427,8 +431,9 @@ final class ChessComClient(
     for {
       _            <- refuseInsideTransaction(url)
       cachedOption <- ApiResponseCache.lookupMeta(url.encode).provideEnvironment(ZEnvironment(pgClient))
+      now          <- Clock.instant
       result <- cachedOption match {
-        case Some(meta) if isFresh(meta, Instant.now()) =>
+        case Some(meta) if isFresh(meta, now) =>
           statsRef
             .update(_.incCacheHit)
             .as(FetchResult.Fresh(meta.bodyId, loadAndDecode[T](url, meta.bodyId, cacheWrites)))

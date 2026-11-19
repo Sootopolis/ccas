@@ -1,6 +1,6 @@
 # Coding conventions are checked by scalafix local rules
 
-**Status:** Accepted, 2026-10-24 (#333).
+**Status:** Accepted, 2026-10-24 (#333). Amended by #509 (a built-in rule, and the test sources' own config).
 
 ## Context
 
@@ -15,6 +15,7 @@ CLAUDE.md's Scala style was checked only by reading the diff, and reading kept m
 - **Shapes a swap would get wrong are reported for a hand edit instead.** An argument with braces of its own (`.map(x => {`) or a closing brace beside the `)` would end in nested braces or `} }`; a lambda parameter below the `(` would sit under the `{` with its body indented a level too deep; and inside braces a `(` that opens a line starts a new statement, so a call continued that way would split in two, which can still compile.
 - **Not every by-name argument.** Detecting by-name parameters needs SemanticDB, which the compiler would then write on every build, and would also take in `ZIO.succeed`, `ZIO.log*`, `ZIO.fail`, `getOrElse` and `assertTrue`, whose arguments are values: braces around a log message or an assertion read worse.
 - **Not an argument that hugs the parens**, as in `f(_.copy(` … `))` or `ZIO.attempt(require(` … `))`: the bracket closing just before `)` opens an argument list on the line of `(`. Only the inner call spans lines there, and the rewrite would leave `) }`. A block or `if` closing there is not a call, so `.map(x => {` … `})` is reported.
+- **A built-in rule where a pattern is enough.** `DisableSyntax`'s regex refuses the usual ways of reading the wall clock or the database's clock in `src/main` (#509), so a timestamp comes from ZIO's `Clock` and a test's `TestClock` can move it. A regex can't see every spelling, so review still owns the rest. A regex sees comments too, so a comment names "the wall clock" rather than the call. A deliberate read is exempted where it stands, with its reason: the logger in `ProgressDisplay`, which is not an effect, and the name tables' windows, which take the database's clock: `NameLock` reads it once its lock is held, and the boot backfills read it too so their windows order with the ones that lock stamps ([0020](0020-claims-on-one-name-queue.md)). The test sources run with `.scalafix-test.conf`, which includes `.scalafix.conf` and clears only the patterns, so a rule added there checks the tests too: a fixture may read the wall clock.
 
 ## Consequences
 
