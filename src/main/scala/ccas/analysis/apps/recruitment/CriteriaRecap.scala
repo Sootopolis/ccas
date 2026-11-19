@@ -102,6 +102,7 @@ object CriteriaRecap {
       if (criteria.nationalityExclude) "from none of these countries" else "from one of these countries"
     val excludedClubs = criteria.excludeClubs.map(slugOf(_, clubSlugs))
     val window        = s"in the last $StatsWindowDays days"
+    // "Of any kind": casual, chess960 and unplayed games count, where Chess.com's rate leaves them out (#476).
     List(
       whole(
         "minDaysSinceRegistration",
@@ -129,13 +130,18 @@ object CriteriaRecap {
       elo("dailyMaxElo", criteria.dailyMaxElo, "daily rating at most this"),
       decimal("dailyMinScoreRate", criteria.dailyMinScoreRate, "daily score rate at least this, draws counting half"),
       decimal("dailyMaxScoreRate", criteria.dailyMaxScoreRate, "daily score rate at most this, draws counting half"),
-      whole("dailyMinGamesFinished", criteria.dailyMinGamesFinished, s"at least this many daily games ended $window"),
-      // At 0 the cached zero-tolerance check also applies, to a timeout of our own record (`FigureCriterion`).
+      whole(
+        "dailyMinGamesFinished",
+        criteria.dailyMinGamesFinished,
+        s"at least this many daily games of any kind ended $window"
+      ),
+      // At 0 the zero-tolerance check also applies, to a timeout in our own reading of the archives (`FigureCriterion`).
       decimal(
         "dailyMaxTimeoutPercent",
         criteria.dailyMaxTimeoutPercent,
-        if (criteria.dailyMaxTimeoutPercent.contains(0.0)) { s"no daily game timed out $window" }
-        else { "timed out of at most this % of daily games, by Chess.com's figure" }
+        if (criteria.dailyMaxTimeoutPercent.contains(0.0)) {
+          s"no daily game of any kind, team matches included, timed out $window"
+        } else { "timed out of at most this % of daily games, by Chess.com's figure" }
       ),
       whole("dailyMaxHoursPerMove", criteria.dailyMaxHoursPerMove, "averages at most this many hours a daily move"),
       whole("dailyMinOngoingGames", criteria.dailyMinOngoingGames, "playing at least this many daily games now"),
@@ -143,12 +149,12 @@ object CriteriaRecap {
       whole(
         "dailyMinTmGamesFinished",
         criteria.dailyMinTmGamesFinished,
-        s"at least this many team-match games ended $window"
+        s"at least this many team-match games of any kind ended $window"
       ),
       decimal(
         "dailyMaxTmTimeoutPercent",
         criteria.dailyMaxTmTimeoutPercent,
-        s"timed out of at most this % of team-match games $window"
+        s"timed out of at most this % of team-match games of any kind $window"
       ),
       whole(
         "dailyMinOngoingTeamMatches",

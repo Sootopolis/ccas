@@ -34,7 +34,8 @@ private[recruitment] enum FigureSource {
 
 /** A check on a row's figures, defined once: the filter named by `liveIn` judges the row it has just written, and
   * [[RecruitmentFilterDefs.CheckCacheCriteria]] judges a stored row while it is younger than `stalenessDays` (#477).
-  * The two zero-tolerance timeouts judge a timeout's date, which no live check does, so they run from cache alone.
+  * The zero-tolerance timeouts judge a timeout's date. The team-match one runs from cache alone, its live rate counting
+  * every game; the daily one also runs live, since Chess.com's rate leaves out games its limit counts (#476).
   */
 private[recruitment] enum FigureCriterion(
   val reason: RejectionReason,
@@ -49,7 +50,7 @@ private[recruitment] enum FigureCriterion(
   case ZeroToleranceDailyTimeout
       extends FigureCriterion(
         reason = RejectionReason.RecentDailyTimeout,
-        liveIn = None,
+        liveIn = Some(FigureSource.DailyStats),
         stalenessDays = StatsWindowDays,
         shouldReject = in =>
           in.criteria.dailyMaxTimeoutPercent.contains(0.0) && in.timeoutInWindow(in.cache.lastDailyTimeoutAt)

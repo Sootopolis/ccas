@@ -46,7 +46,7 @@ object TestRecruitmentPure extends ZIOSpecDefault {
           "maxClubs                  40    in at most this many clubs",
           "excludeSourceAdmins       yes   not an admin of a club being scouted",
           "dailyMinElo               1200  daily rating at least this",
-          "dailyMaxTmTimeoutPercent  0     timed out of at most this % of team-match games in the last 90 days"
+          "dailyMaxTmTimeoutPercent  0     timed out of at most this % of team-match games of any kind in the last 90 days"
         )
       )
     },
@@ -121,7 +121,9 @@ object TestRecruitmentPure extends ZIOSpecDefault {
       val zero = CriteriaRecap.settingLines(nothingSet.copy(dailyMaxTimeoutPercent = Some(0.0)), Map.empty)
       val five = CriteriaRecap.settingLines(nothingSet.copy(dailyMaxTimeoutPercent = Some(5.0)), Map.empty)
       assertTrue(
-        zero == List("dailyMaxTimeoutPercent  0  no daily game timed out in the last 90 days"),
+        zero == List(
+          "dailyMaxTimeoutPercent  0  no daily game of any kind, team matches included, timed out in the last 90 days"
+        ),
         five == List("dailyMaxTimeoutPercent  5  timed out of at most this % of daily games, by Chess.com's figure")
       )
     },

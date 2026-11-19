@@ -79,7 +79,7 @@ private[recruitment] object RecruitmentStatsHelpers {
 
   def extractLastDailyTimeout(archives: List[ApiPlayerArchive], username: Username): Option[Instant] =
     archives.flatMap(_.games)
-      .filter(g => g.timeClass == "daily" && g.`match`.isEmpty) // non-match daily games
+      .filter(_.timeClass == "daily")
       .filter(g => g.sideOf(username).result == GameResultDetail.Timeout)
       .sortBy(_.endTime)(using Ordering[Long].reverse)
       .headOption
