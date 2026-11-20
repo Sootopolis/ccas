@@ -81,12 +81,14 @@ object TestCcasCompletion extends ZIOSpecDefault {
     */
   private def bashOffers(words: String*): ZIO[Any, Throwable, List[String]] = bashOffersAfter("", words*)
 
-  /** As [[bashOffers]], once `prelude` has run: a stand-in for what the shell would have at a real `<TAB>`. */
+  /** As [[bashOffers]], once `prelude` has run: a stand-in for what the shell would have at a real `<TAB>`. Calls the
+    * function `complete` registered for `ccas`, as bash would.
+    */
   private def bashOffersAfter(prelude: String, words: String*): ZIO[Any, Throwable, List[String]] = {
     val line = words.map(word => "'" + word + "'").mkString(" ")
     val script =
-      prelude + "source \"$1\"; COMP_WORDS=(" + line + "); COMP_CWORD=" + (words.size - 1) + "; _ccas; " +
-        "printf '%s\\n' \"${COMPREPLY[@]}\""
+      prelude + "source \"$1\"; COMP_WORDS=(" + line + "); COMP_CWORD=" + (words.size - 1) + "; " +
+        "fn=$(complete -p ccas); fn=${fn##*-F }; ${fn%% *}; printf '%s\\n' \"${COMPREPLY[@]}\""
     for {
       tmp <- ZIO.attempt(Files.createTempFile("ccas-completion-", ".bash"))
       _   <- ZIO.attempt(Files.writeString(tmp, CompletionEmitter.bash))
@@ -101,17 +103,23 @@ object TestCcasCompletion extends ZIOSpecDefault {
     } yield output.linesIterator.filter(_.nonEmpty).toList
   }
 
-  /** What bash offers after `--file` for `typed` in a directory holding `names`, checked by `check` against that
-    * directory. `compopt` works only inside a real completion, so bash 4+'s is stood in for where `readlineQuotes`.
+  /** What bash offers after `--file` for `typed` in a directory holding `names` (a directory where one ends in `/`),
+    * checked by `check` against that directory. `compopt` works only inside a real completion, so bash 4+'s is stood in
+    * for where `readlineQuotes`, and disabled elsewhere to stand for bash 3.2, which lacks it.
     */
   private def filesOffered(names: List[String], typed: String, readlineQuotes: Boolean)(
     check: (Path, List[String]) => TestResult
   ): ZIO[Any, Throwable, TestResult] =
     TempWiring.withTempDir { root =>
       val prelude = if (readlineQuotes) { "compopt() { return 0; }; " }
-      else { "" }
+      else { "enable -n compopt; " }
       for {
-        _ <- ZIO.attemptBlocking(names.foreach(name => Files.writeString(root.resolve(name), "{}")))
+        _ <- ZIO.attemptBlocking {
+          names.foreach { name =>
+            if (name.endsWith("/")) { Files.createDirectory(root.resolve(name)) }
+            else { Files.writeString(root.resolve(name), "{}") }
+          }
+        }
         result <- unlessNoShell {
           bashOffersAfter(prelude, "ccas", "recruitment-criteria", "set", "--file", s"$root/$typed")
             .map(check(root, _))
@@ -251,9 +259,24 @@ object TestCcasCompletion extends ZIOSpecDefault {
           .map(offered => assertTrue(offered == List("from _filedir: my")))
       }
     },
-    test("where readline can't quote names (bash 3.2), the script quotes them itself") {
+    test("where readline can't quote names (bash 3.2), the script quotes them itself, a space closing the word") {
       filesOffered(List("my criteria.json"), typed = "my", readlineQuotes = false) { (root, offered) =>
-        assertTrue(offered == List(s"$root/my\\ criteria.json"))
+        assertTrue(offered == List(s"$root/my\\ criteria.json "))
+      }
+    },
+    test("a name typed with an escaped space completes again, whether readline quotes names or not") {
+      for {
+        bash4 <- filesOffered(List("my criteria.json"), typed = "my\\ cr", readlineQuotes = true) { (root, offered) =>
+          assertTrue(offered == List(s"$root/my criteria.json"))
+        }
+        bash32 <- filesOffered(List("my criteria.json"), typed = "my\\ cr", readlineQuotes = false) { (root, offered) =>
+          assertTrue(offered == List(s"$root/my\\ criteria.json "))
+        }
+      } yield bash4 && bash32
+    },
+    test("where readline can't mark directories (bash 3.2), a directory is offered with its / and no space") {
+      filesOffered(List("sub dir/", "subtitle.json"), typed = "sub", readlineQuotes = false) { (root, offered) =>
+        assertTrue(offered.sorted == List(s"$root/sub\\ dir/", s"$root/subtitle.json ").sorted)
       }
     },
     test("zsh and fish offer files after --file") {
