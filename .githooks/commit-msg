@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Refuse a commit message holding a Claude Code session URL (#323): the repo is public, and a session link is
+# private (CLAUDE.md, Communications). `git commit -v`'s diff, below the scissors line, never reaches the commit,
+# so it is cut first; comment lines are kept, since `-m`'s default cleanup keeps them too.
+if sed '/^# -* >8 -*$/,$d' "$1" | grep -q 'claude\.ai/code/session'; then
+  echo "commit-msg: the message holds a claude.ai/code/session URL; remove it (and any Claude-Session trailer)." >&2
+  exit 1
+fi

@@ -7,14 +7,15 @@ How to set up a clone for working on the code. Installing and running CCAS is in
 Follow the README's Getting Started first, then, once per clone:
 
 ```bash
-# Enable the tracked git hooks (pre-push runs the docs check and `sbt lint`, then the full test suite)
+# Enable the tracked git hooks: pre-push runs the docs check and `sbt lint`, then the full test suite;
+# pre-commit refuses a commit on main or wip; commit-msg refuses a Claude Code session URL
 git config core.hooksPath .githooks
 
 # Have git blame skip the commits that only reformatted the tree
 git config blame.ignoreRevsFile .git-blame-ignore-revs
 ```
 
-Neither setting is carried by `git clone`, so set both on every machine you work from — otherwise pushes skip the pre-push test run silently, and `git blame` credits every reformatted line to the reformat.
+Neither setting is carried by `git clone`, so set both on every machine you work from — otherwise every hook is skipped silently, and `git blame` credits every reformatted line to the reformat.
 
 ## Everyday commands
 

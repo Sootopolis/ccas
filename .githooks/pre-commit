@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Refuse a commit on `main` or `wip` (#323). `main` takes squash merges only, and `wip` must only ever lag it, so
+# that re-parking stays a fast-forward (CLAUDE.md, Git). A detached HEAD, as in a rebase, has no branch and passes.
+branch=$(git symbolic-ref --quiet --short HEAD) || exit 0
+case "$branch" in
+  main | wip)
+    echo "pre-commit: refusing to commit on '$branch'." >&2
+    echo "Cut a branch first, which carries uncommitted work across: git switch -c <type>/<slug>" >&2
+    exit 1
+    ;;
+esac
