@@ -38,6 +38,7 @@ Write one when the decision is hard to reverse, involves a real trade-off, or ha
 | [0028](0028-the-scheduler-reads-only-when-a-schedule-can-be-due.md) | The scheduler reads its schedules only when one can be due | Accepted, 2026-11-10 |
 | [0029](0029-an-interval-schedule-fires-at-the-tick-nearest-its-time.md) | An interval schedule fires at the tick nearest its time | Accepted, 2026-11-10 |
 | [0030](0030-a-cron-schedule-fires-each-wall-clock-time-once.md) | A cron schedule fires each wall-clock time once | Accepted, 2026-11-11 |
+| [0031](0031-stay-with-magnum.md) | Stay with Magnum for SQL access | Accepted, 2026-03-14 |
 
 ## By area
 
@@ -47,4 +48,4 @@ Write one when the decision is hard to reverse, involves a real trade-off, or ha
 - **Club membership:** 0017 (a relationship's two ends), 0021 (the ends as windows, roster coverage), 0022 (closed accounts, their club lists), 0023 (memberships inferred from matches), 0026 (a join the rows cannot place), 0027 (a verdict the rows cannot hold).
 - **CLI:** 0011 (locality, `current_club`, config files).
 - **Server and jobs:** 0013 (the job-log sink), 0015 (the read-idle reaper), 0024 (where job logs and reports live), 0028 (when the scheduler reads its schedules), 0029 (when an interval schedule is due), 0030 (a cron across a clock change).
-- **Build, runtime and configuration:** 0002 (dependencies), 0003 (sbt 2), 0014 (both `DATABASE_URL` forms), 0018 (the two JVM flags), 0025 (conventions scalafix checks).
+- **Build, runtime and configuration:** 0002 (dependencies), 0003 (sbt 2), 0014 (both `DATABASE_URL` forms), 0018 (the two JVM flags), 0025 (conventions scalafix checks), 0031 (Magnum over zio-protoquill).
