@@ -32,12 +32,17 @@ _ccas_env_values() {
 
 _ccas_files() {
   if declare -F _filedir >/dev/null 2>&1; then _filedir; return; fi
-  local f quote=1
+  local f quote=1 word="${cur//\\\\/$'\001'}"
+  word="${word//\\/}"
+  word="${word//$'\001'/\\}"
   COMPREPLY=()
   compopt -o filenames 2>/dev/null && quote=0
   while IFS= read -r f; do
-    if (( quote )); then COMPREPLY+=("$(printf '%q' "$f")"); else COMPREPLY+=("$f"); fi
-  done < <(compgen -f -- "$cur")
+    if (( quote )); then
+      [[ -d $f ]] && f+=/
+      COMPREPLY+=("$(printf '%q' "$f")")
+    else COMPREPLY+=("$f"); fi
+  done < <(compgen -f -- "$word")
 }
 
 _ccas() {
@@ -167,4 +172,13 @@ _ccas() {
     *) COMPREPLY=( $(compgen -W "$opts --help" -- "$cur") ) ;;
   esac
 }
-complete -F _ccas ccas
+if type compopt >/dev/null 2>&1; then
+  complete -F _ccas ccas
+else
+  _ccas_spaced() {
+    _ccas
+    local i
+    for i in "${!COMPREPLY[@]}"; do [[ ${COMPREPLY[i]} == */ ]] || COMPREPLY[i]+=" "; done
+  }
+  complete -o nospace -F _ccas_spaced ccas
+fi

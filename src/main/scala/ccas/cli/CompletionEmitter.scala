@@ -60,20 +60,41 @@ object CompletionEmitter {
       "}"
     )
 
-  // bash: `_ccas_files` uses bash-completion's `_filedir` where loaded, which handles escapes, `~` and colons. Without
-  // it, paths are read line by line so a space or glob character stays in one candidate; compopt (bash 4+) has readline
-  // quote them, and bash 3.2 gets them quoted here, a directory without its `/`.
+  // bash: `_ccas_files` uses bash-completion's `_filedir` where loaded. Without it, the typed word is unescaped for
+  // compgen and paths read line by line; compopt (bash 4+) has readline quote them, and bash 3.2 gets them quoted here,
+  // a directory with its `/`, kept free of a trailing space by `bashRegistration` (#499).
   private val bashFilesFunction: List[String] =
     List(
       "_ccas_files() {",
       "  if declare -F _filedir >/dev/null 2>&1; then _filedir; return; fi",
-      "  local f quote=1",
+      "  local f quote=1 word=\"${cur//\\\\\\\\/$'\\001'}\"",
+      "  word=\"${word//\\\\/}\"",
+      "  word=\"${word//$'\\001'/\\\\}\"",
       "  COMPREPLY=()",
       "  compopt -o filenames 2>/dev/null && quote=0",
       "  while IFS= read -r f; do",
-      "    if (( quote )); then COMPREPLY+=(\"$(printf '%q' \"$f\")\"); else COMPREPLY+=(\"$f\"); fi",
-      "  done < <(compgen -f -- \"$cur\")",
+      "    if (( quote )); then",
+      "      [[ -d $f ]] && f+=/",
+      "      COMPREPLY+=(\"$(printf '%q' \"$f\")\")",
+      "    else COMPREPLY+=(\"$f\"); fi",
+      "  done < <(compgen -f -- \"$word\")",
       "}"
+    )
+
+  // bash 3.2 has no compopt to drop the space after a directory for one completion, so it registers with nospace and
+  // adds the space itself to every candidate but a directory.
+  private val bashRegistration: List[String] =
+    List(
+      "if type compopt >/dev/null 2>&1; then",
+      "  complete -F _ccas ccas",
+      "else",
+      "  _ccas_spaced() {",
+      "    _ccas",
+      "    local i",
+      "    for i in \"${!COMPREPLY[@]}\"; do [[ ${COMPREPLY[i]} == */ ]] || COMPREPLY[i]+=\" \"; done",
+      "  }",
+      "  complete -o nospace -F _ccas_spaced ccas",
+      "fi"
     )
 
   // `--help` is appended by the emitted scripts themselves, so it is dropped from the per-command option list here.
@@ -209,9 +230,8 @@ object CompletionEmitter {
       "            (( posIndex == 1 )) && COMPREPLY=( $(compgen -W \"$(_ccas_env_values \"$prev\")\" -- \"$cur\") ) ;;",
       "    *) COMPREPLY=( $(compgen -W \"$opts --help\" -- \"$cur\") ) ;;",
       "  esac",
-      "}",
-      "complete -F _ccas ccas"
-    )
+      "}"
+    ) ++ bashRegistration
     lines.mkString("\n") + "\n"
   }
 
