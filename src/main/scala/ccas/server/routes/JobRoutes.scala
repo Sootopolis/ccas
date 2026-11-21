@@ -14,7 +14,14 @@ import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.recruitment.RecruitmentApp
 import ccas.analysis.apps.ref.RefApp
 import ccas.analysis.apps.stats.StatsApp
-import ccas.analysis.tables.{PlayerName, RecruitmentAlias, RecruitmentCandidate, RecruitmentRun, RunTrigger}
+import ccas.analysis.tables.{
+  ManagedClub,
+  PlayerName,
+  RecruitmentAlias,
+  RecruitmentCandidate,
+  RecruitmentRun,
+  RunTrigger
+}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, Username}
 import ccas.server.jobs.*
@@ -486,8 +493,16 @@ object JobRoutes {
       resolution.runnable match {
         case Left(_) => ZIO.succeed(unsubmitted)
         case Right(club) =>
-          jobIdOrConflict(runner.submit(kind, Some(club.clubId), params, RunTrigger.Api, effect(club, _)))
-            .map(submitted => unsubmitted.copy(jobIdOption = submitted.toOption, error = submitted.left.toOption))
+          ManagedClub.selectByClubId(club.clubId).flatMap {
+            case None =>
+              val slug = ClubSlug.unwrap(club.slug)
+              ZIO.succeed(
+                unsubmitted.copy(error = Some(s"Club $slug is not managed; add it with 'ccas club add $slug'"))
+              )
+            case Some(_) =>
+              jobIdOrConflict(runner.submit(kind, Some(club.clubId), params, RunTrigger.Api, effect(club, _)))
+                .map(submitted => unsubmitted.copy(jobIdOption = submitted.toOption, error = submitted.left.toOption))
+          }
       }
     }
 

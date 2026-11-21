@@ -207,6 +207,8 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def suiteJobRoutes = suite("JobRoutes")(
     testRecruitmentSuccess,
+    testRecruitmentRefusesUnmanagedClub,
+    testMembershipRefusesUnmanagedClub,
     testRecruitmentConflict,
     testRecruitmentBadJson,
     testMembershipSingleClub,
@@ -237,7 +239,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testRecruitmentSuccess = test("POST /api/jobs/recruitment success") {
     for {
-      _    <- ensureClubs
+      _    <- ensureManagedClubs
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
@@ -257,7 +259,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testRecruitmentConflict = test("POST /api/jobs/recruitment conflict") {
     for {
-      _    <- ensureClubs
+      _    <- ensureManagedClubs
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Conflict)
       response <- JobRoutes.routes.runZIO(
@@ -273,6 +275,35 @@ object TestRoutes extends ZIOSpecDefault {
     )
   }
 
+  private def testRecruitmentRefusesUnmanagedClub =
+    test("POST /api/jobs/recruitment refuses a club that is not managed") {
+      for {
+        _ <- unmanageClubs
+        response <- JobRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/jobs/recruitment", s"""{"club":$testClub}""")
+        )
+        parsed <- response.body.asString.map(_.fromJson[ClubJobResult])
+      } yield assertTrue(
+        response.status == Status.Ok,
+        parsed.toOption.get.jobIdOption.isEmpty,
+        parsed.toOption.get.error.contains("Club test-club is not managed; add it with 'ccas club add test-club'")
+      )
+    }
+
+  private def testMembershipRefusesUnmanagedClub =
+    test("POST /api/jobs/membership refuses a club that is not managed") {
+      for {
+        _ <- unmanageClubs
+        response <- JobRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubs":[{"kind":"by_slug","slug":"test-club"}]}""")
+        )
+        parsed <- response.body.asString.map(_.fromJson[List[ClubJobResult]])
+      } yield assertTrue(
+        parsed.toOption.get.head.jobIdOption.isEmpty,
+        parsed.toOption.get.head.error.exists(_.contains("is not managed"))
+      )
+    }
+
   private def testRecruitmentBadJson = test("POST /api/jobs/recruitment bad JSON") {
     for {
       response <- JobRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/jobs/recruitment", "not json"))
@@ -281,7 +312,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testMembershipSingleClub = test("POST /api/jobs/membership single club") {
     for {
-      _    <- ensureClubs
+      _    <- ensureManagedClubs
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
@@ -312,7 +343,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testMembershipMultipleClubs = test("POST /api/jobs/membership multiple clubs") {
     for {
-      _    <- ensureClubs
+      _    <- ensureManagedClubs
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
@@ -341,7 +372,7 @@ object TestRoutes extends ZIOSpecDefault {
   private def testMembershipResolvesByIdOverStaleSlug =
     test("POST /api/jobs/membership resolves by clubId even when the slug is stale") {
       for {
-        _    <- ensureClubs
+        _    <- ensureManagedClubs
         fake <- getFakeRunner
         _    <- fake.setNextAction(Action.Succeed)
         // clubId 200 is "test-club"; the slug sent no longer exists, but the id pins the club.
@@ -365,7 +396,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testMembershipWithUnknownClub = test("POST /api/jobs/membership with unknown club") {
     for {
-      _    <- ensureClubs
+      _    <- ensureManagedClubs
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
@@ -402,6 +433,7 @@ object TestRoutes extends ZIOSpecDefault {
       for {
         _    <- Club.upsert(club.copy(slug = ClubSlug("route-former")))
         _    <- Club.upsert(club)
+        _    <- ManagedClub.markManaged(club.clubId, t0)
         fake <- getFakeRunner
         _    <- fake.setNextAction(Action.Succeed)
         response <- JobRoutes.routes.runZIO(
@@ -423,7 +455,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testHistorySingleClub = test("POST /api/jobs/history single club") {
     for {
-      _    <- ensureClubs
+      _    <- ensureManagedClubs
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
@@ -645,7 +677,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testStatsWithInvalidDateReturns400 = test("POST /api/jobs/stats with invalid date returns 400") {
     for {
-      _    <- ensureClubs
+      _    <- ensureManagedClubs
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
@@ -656,7 +688,7 @@ object TestRoutes extends ZIOSpecDefault {
 
   private def testStatsWithPartialDatesReturns400 = test("POST /api/jobs/stats with only 'since' returns 400") {
     for {
-      _    <- ensureClubs
+      _    <- ensureManagedClubs
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
@@ -669,7 +701,7 @@ object TestRoutes extends ZIOSpecDefault {
     test("unhandled non-user-facing error returns generic 500 and logs cause under the route") {
       val msg = "simulated downstream failure for test"
       for {
-        _    <- ensureClubs
+        _    <- ensureManagedClubs
         fake <- getFakeRunner
         _    <- fake.setNextAction(Action.Fail(msg))
         response <- JobRoutes.routes.runZIO(
@@ -756,6 +788,18 @@ object TestRoutes extends ZIOSpecDefault {
   private val ensureClubs = for {
     _ <- Club.upsert(Club(ClubId(200), t0, ClubSlug("test-club"), "Test Club", None, None, None))
     _ <- Club.upsert(Club(ClubId(201), t0, ClubSlug("other-club"), "Other Club", None, None, None))
+  } yield ()
+
+  // Job submission refuses a club that is not managed, so the submit tests mark both clubs.
+  private val ensureManagedClubs = for {
+    _ <- ensureClubs
+    _ <- ManagedClub.markManaged(ClubId(200), t0)
+    _ <- ManagedClub.markManaged(ClubId(201), t0)
+  } yield ()
+
+  private val unmanageClubs = for {
+    _ <- ensureClubs
+    _ <- ManagedClub.delete(ClubId(200))
   } yield ()
 
   // A club whose former name `renamed-from` only `club_name` still knows. Re-running it renames the club back and
