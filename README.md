@@ -125,6 +125,20 @@ Every boot (`ccas server up`, detached or not, and `ccas-server`) asks `Boot aga
 
 The detached server writes its pid to `${XDG_STATE_HOME:-~/.local/state}/ccas/ccas-<port>.pid` and its stdout/stderr to `<log_dir>/server-<port>.log` (`log_dir` from the [config file](#cli-config-file), default `~/.local/state/ccas/logs`). Both are named by the port, so two servers on one machine (one per worktree, say, each with its own `SERVER_PORT` and database) keep apart, and `status` and `down` act only on the server at this shell's port unless given `--port <n>`. `ccas server list` reads every pid file and probes every port at once, so a slow database delays the list by one probe's timeout, not one per server. It also lists this shell's port when a server answers there without a pid file, which is how a foreground server there shows; one on another port writes no pid file and isn't listed. With nothing to list, it prints no rows and says so on stderr. It only reads, leaving a stale pid file in place: `ccas server down --port <n>` clears it. Job logs are not named by the port: by default every server on the machine, whatever directory it was started from, writes them to `${XDG_STATE_HOME:-~/.local/state}/ccas/job-logs`. Give one of two such servers its own `JOB_LOGS_DIR` when their databases' `job_log_retention_days` differ, since each server's sweep applies its own window to every log there. Reports, which the apps' own mains write (and a server only for a History job it stops midway), go to `${XDG_DATA_HOME:-~/.local/share}/ccas/output` by default, and `CCAS_OUTPUT_DIR` moves them; runs against two databases that share a club otherwise archive each other's reports ([ADR 0024](docs/adr/0024-one-directory-per-machine.md)). `ccas server up --detach` refuses a port where a server already answers: `already running on 127.0.0.1:<port>, pid=<n>` for one it started, and a note to stop it first for one it didn't. It also refuses a port the server couldn't listen on, saying why. It waits 30s for the server to report ready before giving up and stopping it — raise that with `--ready-timeout-seconds <n>` or the config file's `ready_timeout_seconds` when the database is slow to wake (a suspended serverless compute can take longer than the default). For a supervised/long-lived server (systemd, Docker, Render) run the foreground `ccas-server` binary instead.
 
+### Running the server under systemd
+
+On Linux, [`contrib/ccas.service`](contrib/ccas.service) runs the foreground `ccas-server` as a systemd user unit, so systemd starts it and restarts it if it fails. Configure the server with `ccas config` first, since the unit sets no environment of its own; then:
+
+```bash
+sbt stage
+ln -sf "$PWD/target/universal/stage/bin/ccas-server" ~/.local/bin/ccas-server
+cp contrib/ccas.service ~/.config/systemd/user/
+systemctl --user enable --now ccas.service
+loginctl enable-linger "$USER"   # optional: start at boot, before you log in
+```
+
+`journalctl --user -u ccas` shows its output. Use `systemctl --user stop ccas` rather than `ccas server down`, which only stops servers it started itself.
+
 ### Shell completion
 
 `ccas completion <bash|zsh|fish>` prints a self-contained, **pure-shell** completion script. It boots the JVM once when you install it; afterwards every `<TAB>` runs entirely in the shell (no JVM, no network), so completion is instant. The scripts complete subcommands and flags, plus **club slugs** (after `--club`, and for the `ccas use-club` argument) and **recent job ids** (for `ccas logs` and `ccas cancel`) read from cache files, and the **settings `ccas config` knows**, with the values of those that take a fixed set (`ccas config set CCAS_BODY_STORE_BACKEND <TAB>` offers `fs s3`), and **file paths** after `ccas recruitment-criteria set --file`.
@@ -191,7 +205,7 @@ ccas config unset SERVER_PORT      # remove a value
 ccas config path                   # print the file's path
 ```
 
-At boot the server applies this file as a JVM overlay, so the **resolution order is: process environment → `ccas.env` → built-in default.** A real env var (or a systemd `Environment=` / container secret) always wins over the file, so hosted deployments keep injecting secrets through the environment. `DATABASE_URL` and `DB_PASSWORD` live in the `0600` file and are redacted by `list`/`show` unless `--show-secrets`. The file is plain env-var form, so it doubles as a systemd `EnvironmentFile`. `ccas config set DATABASE_URL <url>` stores the URL literally (no shell-quoting needed) — only single-quote the `&` yourself if you intend to `source` the file in a POSIX shell. This is the *server*-bootstrap file; it is separate from the CLI client's [`config.conf`](#cli-config-file).
+At boot the server applies this file as a JVM overlay, so the **resolution order is: process environment → `ccas.env` → built-in default.** A real env var (or a systemd `Environment=` / container secret) always wins over the file, so hosted deployments keep injecting secrets through the environment. `DATABASE_URL` and `DB_PASSWORD` live in the `0600` file and are redacted by `list`/`show` unless `--show-secrets`. Since the server reads the file itself, a systemd unit needs no `EnvironmentFile=` line ([Running the server under systemd](#running-the-server-under-systemd)). `ccas config set DATABASE_URL <url>` stores the URL literally (no shell-quoting needed) — only single-quote the `&` yourself if you intend to `source` the file in a POSIX shell. This is the *server*-bootstrap file; it is separate from the CLI client's [`config.conf`](#cli-config-file).
 
 ### DB-owned settings
 
