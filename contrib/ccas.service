@@ -1,0 +1,15 @@
+# systemd user unit for an always-on local CCAS server. Install steps: README,
+# "Running the server under systemd". The server reads its settings from
+# ~/.config/ccas/ccas.env itself (`ccas config`), so the unit names none.
+[Unit]
+Description=CCAS server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/ccas-server
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
