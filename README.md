@@ -249,7 +249,7 @@ Because waiting on a cache is never obligatory, the same applies to a store that
 | `CCAS_R2_CONNECT_TIMEOUT_MS` | `s3` transport connect timeout |
 | `CCAS_R2_SOCKET_TIMEOUT_MS` | `s3` transport socket timeout. Must not exceed the widest deadline above |
 
-On an `s3` bucket, set an **age-based** lifecycle rule with a wide margin over the longest retention window, since a few objects escape the cleanup sweep; R2's default multipart-abort rule is not one. [ADR 0009](docs/adr/0009-bound-every-body-store-operation.md) says which objects, and why the margin must be wide.
+On an `s3` bucket, set an **age-based** lifecycle rule on the `bodies/` prefix, where CCAS keeps every body, with a wide margin over the longest retention window, since a few objects escape the cleanup sweep; R2's default multipart-abort rule is not one. [ADR 0009](docs/adr/0009-bound-every-body-store-operation.md) says which objects, and why the margin must be wide.
 
 ### Deployment model
 

@@ -16,7 +16,7 @@ import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
   * [[BodyStore]] (Cloudflare R2 in prod, local filesystem in dev/test), keyed by the SHA-256 hash — the blob cache is
   * not source of truth, so it has no business round-tripping through metered Postgres egress. This table keeps only
   * `(body_id, body_hash)`: the surrogate `body_id` preserves the existing FKs from `api_response_cache` and
-  * `api_fetch_failure`, and `body_hash` is both the dedup key and the BodyStore object key.
+  * `api_fetch_failure`, and `body_hash` is both the dedup key and the key the BodyStore is addressed by.
   */
 final case class ApiResponseBody(
   bodyHash: String

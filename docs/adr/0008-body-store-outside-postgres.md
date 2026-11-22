@@ -1,6 +1,6 @@
 # Keep response bodies out of Postgres, in a content-addressed store
 
-**Status:** Accepted, 2026-08-07 (#191, #200). Amended by #211 (deadlines), #215 (three-valued read), #222 (attempt budget), #348 (the fs root resolves through `AppDir`).
+**Status:** Accepted, 2026-08-07 (#191, #200). Amended by #211 (deadlines), #215 (three-valued read), #222 (attempt budget), #348 (the fs root resolves through `AppDir`), #242 (s3 keys under `bodies/`).
 
 ## Context
 
@@ -11,7 +11,7 @@ Response *metadata* is small, indexed and queried; response *bodies* are large, 
 Bodies live in a content-addressed `BodyStore` (`ccas.utils.client`), keyed by the same hex SHA-256 that `api_response_body` records — so `put` is idempotent and dedup is preserved for free. Two backends, selected by `body-store.backend`:
 
 - `fs` (default) — `FsBodyStore`, objects at `root/<hash[:2]>/<hash>`, written temp-then-rename so a concurrent reader never sees a half-written body.
-- `s3` — `S3BodyStore`, AWS SDK v2 sync with `UrlConnectionHttpClient`, path-style, pointed at Cloudflare R2 via `CCAS_R2_*`.
+- `s3` — `S3BodyStore`, AWS SDK v2 sync with `UrlConnectionHttpClient`, path-style, pointed at Cloudflare R2 via `CCAS_R2_*`, objects at `bodies/<hash>`. The prefix is what lets the bucket's lifecycle rule ([0009](0009-bound-every-body-store-operation.md)) leave everything else in the bucket alone (#242). It is one prefix, not one per kind: a cached response and a failure's body share one object through dedup (a cached body that fails to decode is also recorded as that failure's evidence), so splitting them would store a shared body twice and give up the content addressing. Objects written before #242 sat at the bucket root and were copied under the prefix out of band, so the code reads one layout and has no fallback to the old keys.
 
 Only the blobs move. The metadata index, the within-`max-age` short-circuit and ETag/304 revalidation all stay in Postgres — see [0007](0007-response-caching-in-postgres.md).
 
@@ -35,9 +35,9 @@ The SHA-256 is taken over the String's UTF-8 bytes, so the store key and the sto
 
 ### A missing object and an unreachable store are not the same failure (#215)
 
-`BodyStore.read` returns a three-valued `BodyRead` — `Found` / `Missing` / `Unavailable` — because the two non-`Found` cases demand different repairs even though a refetch heals both.
+`BodyStore.read` returns a three-valued `BodyRead` — `Found` / `NotStored` / `Unavailable` — because the two non-`Found` cases demand different repairs even though a refetch heals both.
 
-`Missing` (pruned pointer row, absent object) means the `api_response_cache` row is a lie, so `ChessComClient.loadAndDecode` drops it. `Unavailable` (store error *or* deadline breach) means the row is still accurate and still holds the ETag and `max-age`, so it is **kept**: invalidating would spend a transient outage's worth of validators permanently, leaving every URL touched during it to pay a full unconditional GET after recovery instead of a 304.
+`NotStored` (pruned pointer row, absent object) means the `api_response_cache` row is a lie, so `ChessComClient.loadAndDecode` drops it. `Unavailable` (store error *or* deadline breach) means the row is still accurate and still holds the ETag and `max-age`, so it is **kept**: invalidating would spend a transient outage's worth of validators permanently, leaving every URL touched during it to pay a full unconditional GET after recovery instead of a 304.
 
 Either way the refetch is unconditional — a conditional GET could return 304 and leave us with metadata and still no body — and the refetch's own `upsertWithBody` no-ops while the store is down, so the preserved row self-heals on the first successful put. `BodyRead.toOption` exists for callers where the distinction genuinely does not matter (`ApiFetchFailure.selectRecent`'s audit display); cache code pattern-matches.
 

@@ -3,21 +3,68 @@ package ccas.utils.client
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.util.Comparator
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue}
 
 import scala.jdk.CollectionConverters.*
+import scala.util.Using
 
 import com.typesafe.config.ConfigFactory
+import software.amazon.awssdk.core.ResponseBytes
+import software.amazon.awssdk.core.sync.RequestBody
+import software.amazon.awssdk.services.s3.S3Client
+import software.amazon.awssdk.services.s3.model.{
+  DeleteObjectRequest,
+  DeleteObjectResponse,
+  GetObjectRequest,
+  GetObjectResponse,
+  NoSuchKeyException,
+  PutObjectRequest,
+  PutObjectResponse
+}
 import zio.*
 import zio.config.magnolia.DeriveConfig
 import zio.config.typesafe.TypesafeConfigProvider
 import zio.test.*
 
 /** Unit coverage for [[FsBodyStore]] — the local-filesystem [[BodyStore]] that is the dev/test/CI double for the R2
-  * backing store (#191) — plus the companion's fs-root resolution and error-degrading accessors (#200). Each test
-  * gets its own temp root so runs don't interfere.
+  * backing store (#191) — plus [[S3BodyStore]]'s key layout against an in-memory client (#242), and the companion's
+  * fs-root resolution and error-degrading accessors (#200). Each test gets its own temp root so runs don't interfere.
   */
 object TestBodyStore extends ZIOSpecDefault {
+
+  /** In-memory `S3Client` recording each operation and the key it addressed, so [[S3BodyStore]] is testable without a
+    * network. Every SDK method it overrides is a `default` that would otherwise throw.
+    */
+  private final class RecordingS3Client extends S3Client {
+    private val objects   = new ConcurrentHashMap[String, Array[Byte]]()
+    private val requested = new ConcurrentLinkedQueue[(String, String)]()
+
+    def requests: Chunk[(String, String)] = Chunk.fromIterable(requested.asScala)
+    def storedKeys: Set[String]           = objects.keySet.asScala.toSet
+
+    def serviceName(): String = S3Client.SERVICE_NAME
+    def close(): Unit         = ()
+
+    override def getObjectAsBytes(request: GetObjectRequest): ResponseBytes[GetObjectResponse] = {
+      requested.add("get" -> request.key)
+      Option(objects.get(request.key)) match {
+        case Some(bytes) => ResponseBytes.fromByteArray(GetObjectResponse.builder().build(), bytes)
+        case None        => throw NoSuchKeyException.builder().message(s"no object at ${request.key}").build()
+      }
+    }
+
+    override def putObject(request: PutObjectRequest, body: RequestBody): PutObjectResponse = {
+      requested.add("put" -> request.key)
+      objects.put(request.key, Using.resource(body.contentStreamProvider().newStream())(_.readAllBytes()))
+      PutObjectResponse.builder().build()
+    }
+
+    override def deleteObject(request: DeleteObjectRequest): DeleteObjectResponse = {
+      requested.add("delete" -> request.key)
+      objects.remove(request.key)
+      DeleteObjectResponse.builder().build()
+    }
+  }
 
   private def freshStore: ZIO[Scope, Throwable, (FsBodyStore, Path)] =
     ZIO.acquireRelease(
@@ -61,6 +108,7 @@ object TestBodyStore extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment & Scope, Any] = suite("BodyStore")(
     suiteFs,
+    suiteS3,
     suiteFsRootResolution,
     suiteDegradation,
     suiteDeadlines,
@@ -142,6 +190,39 @@ object TestBodyStore extends ZIOSpecDefault {
         a          <- store.get(hash)
         b          <- store.get(hashB)
       } yield assertTrue(a.exists(_.sameElements(bytes)), b.exists(_.sameElements(bytesB)))
+    }
+  )
+
+  /** #242: R2's lifecycle rule is scoped to `bodies/`, outside the code, so the prefix is asserted as a literal — a
+    * change to it alone must fail here rather than leave every new object beyond the rule's reach.
+    */
+  private def suiteS3 = suite("S3BodyStore")(
+    test(
+      "put, get and delete all address bodies/<hash>, so the lifecycle rule scoped to that prefix covers every object"
+    ) {
+      val key = s"bodies/$hash"
+      for {
+        client <- ZIO.succeed(new RecordingS3Client)
+        store = new S3BodyStore(client, "ccas-test")
+        _       <- store.put(hash, bytes)
+        stored  <- store.get(hash)
+        _       <- store.delete(hash)
+        deleted <- store.get(hash)
+      } yield assertTrue(
+        client.requests == Chunk("put" -> key, "get" -> key, "delete" -> key, "get" -> key),
+        stored.exists(_.sameElements(bytes)),
+        deleted.isEmpty,
+        client.storedKeys.isEmpty
+      )
+    },
+    test("an absent object reads as None, so BodyRead.NotStored still reaches the cache on s3") {
+      // `NotStored` is what tells the cache its row is a lie (#215). A `NoSuchKeyException` escaping as a failure
+      // would read as `Unavailable`, and `HealthLogging` would announce an outage over one missing object.
+      for {
+        store <- ZIO.succeed(new S3BodyStore(new RecordingS3Client, "ccas-test"))
+        raw   <- store.get(hash)
+        read  <- BodyStore.read(hash).provideEnvironment(ZEnvironment[BodyStore](store))
+      } yield assertTrue(raw.isEmpty, read == BodyRead.NotStored)
     }
   )
 
