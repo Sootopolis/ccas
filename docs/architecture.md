@@ -5,14 +5,16 @@ What each moving part is and how the pieces connect. Reference, not rationale �
 ## Packages
 
 - **`ccas.api`** — Chess.com API models: case classes for the JSON responses (`ApiPlayer`, `ApiClub`, `ApiDailyMatch`, …) that derive `JsonDecoder`, with `JsonDecoding` supplying the shared `URL` decoder. They are read-only DTOs, never written to the database directly. Fixtures live in `data/test/api/*.json`, and `TestApiJsonParsing` asserts they parse.
-- **`ccas.analysis`** — domain tables and business logic. `analysis.tables` holds the persisted entities (core, ref resolution, recruitment, history crawl, run tracking, `AppSetting`, and API diagnostics and caching). `analysis.apps` holds the [applications](#applications-ccasanalysisapps) and shared helpers (`PlayerUpdater`, `UsernameRenameResolver`, `ClubSlugRenameResolver`).
+- **`ccas.analysis`** — domain tables and business logic. `analysis.tables` holds the persisted entities (core, ref resolution, recruitment, history crawl, run tracking and `AppSetting`). `analysis.apps` holds the [applications](#applications-ccasanalysisapps) and shared helpers (`PlayerUpdater`, `UsernameRenameResolver`, `ClubSlugRenameResolver`, `OutputFile`).
 - **`ccas.server`** — the zio-http backend: `server.jobs` (`JobRunner`, `JobRun`, `JobSchedule`), `server.routes`, `server.scheduler` (`JobScheduler`). Entry point `CcasServer extends ZIOAppDefault`.
 - **`ccas.cli`** — the zio-cli binary, `ccas.cli.Main`. `CliCommand` defines the tree, `Dispatcher` turns each parsed command into HTTP calls against a running server, and `CompletionSpec` / `CompletionEmitter` generate shell completions. Exit codes: 0 success or help, 1 failure (a failed job, a server that is not running), 2 usage error.
-- **`ccas.utils`** — shared infrastructure: the Chess.com HTTP client (`client/`), JSON traits (`json/`), the SQL client and helpers (`sql/`), opaque-type utilities (`opaque/`), pretty-printing.
+- **`ccas.utils`** — shared infrastructure: the Chess.com HTTP client with the tables it caches responses and records its requests in (`client/`), JSON traits (`json/`), the SQL client and helpers (`sql/`), opaque-type utilities (`opaque/`), pretty-printing.
+
+A package imports only from its own layer and those below it, as scalafix's `PackageLayers` checks against the layers `.scalafix.conf` lists ([0025](adr/0025-conventions-checked-by-scalafix.md)).
 
 ## Opaque types and enums
 
-**Opaque types.** Domain IDs and constrained values are Scala 3 opaque types whose companions extend the `ccas.utils.opaque` trait for their underlying type (`LongCompanion`, `StringCompanion`, …). The trait supplies the `JsonCodec`, `DbCodec` and `DeriveConfig`, with optional `validateRaw` / `normalize` hooks. Chess.com domain IDs live in `ccas.api.misc.subtypes`; internal surrogate IDs live in `ccas.analysis.tables.subtypes` and extend `PositiveLongCompanion`, since `BIGSERIAL` keys start at 1.
+**Opaque types.** Domain IDs and constrained values are Scala 3 opaque types whose companions extend the `ccas.utils.opaque` trait for their underlying type (`LongCompanion`, `StringCompanion`, …). The trait supplies the `JsonCodec`, `DbCodec` and `DeriveConfig`, with optional `validateRaw` / `normalize` hooks. Chess.com domain IDs live in `ccas.api.misc.subtypes`; the IDs we mint live in `ccas.analysis.tables.subtypes`, except the response cache's, which sit beside its tables in `ccas.utils.client`. A `BIGSERIAL` key's ID extends `PositiveLongCompanion`, since those keys start at 1.
 
 **Enums.** An enum read from JSON derives zio-json's `JsonDecoder`, or `JsonCodec` if we write it too; `EnumSql[T]` supplies the database codec. `@jsonHintNames` and `@jsonHint` declare the wire spelling, and decoding matches it exactly, so a Chess.com enum follows [what the API sends](chess-com-api.md#enum-fields-are-not-spelt-alike) (`"closed:fair_play_violations"` → `Fairplay`).
 

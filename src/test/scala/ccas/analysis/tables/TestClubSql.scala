@@ -4,13 +4,10 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import com.augustnagro.magnum.sql
 import zio.{Chunk, Ref, ZIO}
-import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.apiDailyMatchJson
 import ccas.api.misc.enums.PlayerStatusCategory.{Active, Closed}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
-import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.sql.{ForcedOverlap, FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -29,7 +26,6 @@ object TestClubSql extends ZIOSpecDefault {
     testClubMatchRefUpsert,
     testClubMatchRefDelete,
     testClubMatchRefDeleteAll,
-    testSlugFromMatchRefRejectsABoardNamingNoClub,
     testTwoClubsMayHoldOneSlug,
     testClubAdminInsertAndSelect,
     testClubAdminDeleteByClub,
@@ -197,30 +193,6 @@ object TestClubSql extends ZIOSpecDefault {
       resultB <- ClubMatchRef.selectId(refB.clubId)
     } yield assertTrue(resultA.isEmpty, resultB.isEmpty)
   }
-
-  // A board that names no club is a malformed response, not "no rename to be had": Tier B must see the difference,
-  // since its answer to absence is to move on quietly (ADR 0019).
-  private def testSlugFromMatchRefRejectsABoardNamingNoClub =
-    test("slugFromMatchRef fails when the board's team URL names no club") {
-      val club    = Club(ClubId(240), Times.t0, ClubSlug("board-says-nothing"), "Boardless", None, None, None)
-      val matchId = ClubMatchId(9610)
-      val matchJson = apiDailyMatchJson(
-        matchId = ClubMatchId.unwrap(matchId),
-        team1Club = "renamed-club",
-        team2Club = "opponent-club",
-        team1Players = List(("p1", 1)),
-        team2Players = List(("p2", 1))
-      ).replace("https://api.chess.com/pub/club/renamed-club", "https://api.chess.com")
-      val routes = Routes(
-        Method.GET / "pub" / "match" / long("matchId") -> handler((_: Long, _: Request) => Response.json(matchJson))
-      )
-      for {
-        _ <- Club.upsert(club)
-        _ <- ClubMatchRef.insert(ClubMatchRef(clubId = club.clubId, matchId = matchId, isLive = false, isTeam1 = true))
-        client <- TestChessComClientSupport.fakeClient(routes)
-        result <- Club.slugFromMatchRef(club.clubId, client).either
-      } yield assertTrue(result.left.exists(_.isInstanceOf[IllegalArgumentException]))
-    }
 
   // `club.slug` is a display cache with no unique index since #254, and only `club_name` says who holds a name now.
   // The second upsert here is what a `club_slug_key` still in place would reject.

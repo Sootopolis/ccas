@@ -1,4 +1,4 @@
-package ccas.analysis.tables
+package ccas.utils.client
 
 import java.sql.SQLException
 import java.time.Instant

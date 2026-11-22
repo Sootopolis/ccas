@@ -7,7 +7,7 @@ import zio.ZIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.JobRunId
+import ccas.analysis.tables.subtypes.JobRunId
 import ccas.server.ServerTables
 import ccas.server.jobs.{JobKind, JobRun, JobRunStatus}
 import ccas.utils.sql.PostgresClient.withTransaction

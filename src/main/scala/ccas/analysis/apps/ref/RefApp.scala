@@ -7,8 +7,9 @@ import zio.{Clock, ExitCode, Ref, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import RefUtils.*
 
+import ccas.analysis.apps.OutputFile
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, SkipCount, Tables}
-import ccas.utils.{display, ApiConcurrency, OutputFile, ProgressDisplay}
+import ccas.utils.{display, ApiConcurrency, ProgressDisplay}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.DbCodecs.given

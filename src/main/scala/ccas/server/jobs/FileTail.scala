@@ -9,7 +9,7 @@ import java.util.Arrays
 import zio.{Chunk, Duration, Promise, Ref, UIO, ZIO}
 import zio.stream.ZStream
 
-import ccas.api.misc.subtypes.JobRunId
+import ccas.analysis.tables.subtypes.JobRunId
 
 /** Streams a submitted job's log file `${logDir}/<jobId>.log` (written by [[FileSink]]) as lines, emitting them as
   * they are appended and closing once the job is terminal and the tail has reached EOF. Callers go through

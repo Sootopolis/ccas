@@ -2,8 +2,6 @@ package ccas.utils.client
 
 import zio.{Task, ZIO}
 
-import ccas.analysis.tables.subtypes.ApiResponseBodyId
-
 /** What a fetch concluded: the resource is absent, or it is present and this is how we obtained it.
   *
   * [[FetchResult.Missing]] is an answer, not a failure — Chess.com reported that nothing lives at this URL, and

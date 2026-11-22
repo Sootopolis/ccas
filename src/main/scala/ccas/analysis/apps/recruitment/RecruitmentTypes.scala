@@ -5,7 +5,7 @@ import java.time.Instant
 import zio.{Ref, RIO}
 import zio.http.URL
 
-import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
+import ccas.analysis.tables.{CandidateOutcome, PlayerRecruitmentCache, RecruitmentCriteria, RejectionReason}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}

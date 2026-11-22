@@ -2,8 +2,6 @@ package ccas.utils.client
 
 import java.time.Instant
 
-import ccas.analysis.tables.ClientStats
-
 private[ccas] case class ClientStatsAccumulator(
   requests: Long = 0,
   successes: Long = 0,

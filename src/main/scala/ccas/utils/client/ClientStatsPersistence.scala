@@ -5,7 +5,6 @@ import java.util.concurrent.TimeUnit
 
 import zio.{Clock, Fiber, Ref, UIO, ZEnvironment, ZIO}
 
-import ccas.analysis.tables.{ClientConfig, ClientStats}
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 

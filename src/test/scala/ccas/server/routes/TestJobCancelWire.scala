@@ -5,7 +5,7 @@ import zio.http.{Client, Server}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.RunTrigger
-import ccas.api.misc.subtypes.JobRunId
+import ccas.analysis.tables.subtypes.JobRunId
 import ccas.cli.{CcasApiClient, CliError, JobFollower, TempWiring}
 import ccas.server.ServerTables
 import ccas.server.jobs.{JobKind, JobRun, JobRunner, JobRunStatus}

@@ -6,9 +6,8 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.analysis.apps.recruitment.{CandidateOutcome, RejectionReason}
-import ccas.analysis.apps.recruitment.CandidateOutcome.given
-import ccas.analysis.apps.recruitment.RejectionReason.given
+import ccas.analysis.tables.CandidateOutcome.given
+import ccas.analysis.tables.RejectionReason.given
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, PlayerId}
 import ccas.utils.sql.DbCodecs.given

@@ -4,6 +4,7 @@ import java.nio.file.Paths
 
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
+import ccas.analysis.apps.OutputFile
 import ccas.server.jobs.JobRunner
 
 /** `AppDir#resolve` with the two real directories as subjects and `XdgBase#ccasDir` with the bases only the CLI and body

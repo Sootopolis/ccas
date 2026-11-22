@@ -35,6 +35,10 @@ final case class PlayerRecruitmentCache(
 }
 
 object PlayerRecruitmentCache {
+
+  /** The days recruitment's team-match figures and timeout checks look back over, as the `*_90d` columns say. */
+  val StatsWindowDays = 90
+
   def empty(playerId: PlayerId, fetchedAt: Instant): PlayerRecruitmentCache =
     PlayerRecruitmentCache(
       playerId = playerId,

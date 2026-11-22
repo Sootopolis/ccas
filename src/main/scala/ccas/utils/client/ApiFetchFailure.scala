@@ -1,4 +1,4 @@
-package ccas.analysis.tables
+package ccas.utils.client
 
 import java.nio.charset.StandardCharsets
 import java.sql.SQLException
@@ -7,7 +7,6 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.utils.client.BodyStore
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO, withTransaction}

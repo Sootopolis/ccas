@@ -14,14 +14,15 @@ import zio.http.{Client, Server}
 import zio.stream.ZStream
 import zio.test.{assertTrue, Live, Spec, TestAspect, TestClock, ZIOSpecDefault, ZTestLogger}
 
-import ccas.analysis.tables.{ApiResponseCache, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, JobRunId}
+import ccas.analysis.tables.RunTrigger
+import ccas.analysis.tables.subtypes.JobRunId
+import ccas.api.misc.subtypes.ClubId
 import ccas.cli.CcasApiClient
 import ccas.server.jobs.{JobEffect, JobKind, JobLogs, JobRun, JobRunner, JobRunStatus}
 import ccas.server.routes.JobRoutes.JobStatusResponse
 import ccas.server.scheduler.{JobSchedule, JobScheduler}
 import ccas.utils.{JobLogSink, ProgressDisplay}
-import ccas.utils.client.{BodyStore, FsBodyStore, TestChessComClientSupport}
+import ccas.utils.client.{ApiResponseCache, BodyStore, FsBodyStore, TestChessComClientSupport}
 import ccas.utils.sql.{DatabaseAddress, FreshSchemaLayer, PostgresClient}
 
 /** What `CcasServer` does at boot: the pid file a detached server owns, what it says and asks about its database

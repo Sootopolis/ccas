@@ -8,7 +8,8 @@ import zio.stream.ZStream
 import zio.test.{assertCompletes, assertTrue, Spec, TestAspect, TestClock, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
+import ccas.analysis.tables.subtypes.JobRunId
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.ServerTables
 import ccas.server.jobs.{JobKind, JobLogs, JobRun, JobRunner}
 import ccas.utils.ProgressDisplay

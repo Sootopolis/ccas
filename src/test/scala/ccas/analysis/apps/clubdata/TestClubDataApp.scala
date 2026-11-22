@@ -193,7 +193,7 @@ object TestClubDataApp extends ZIOSpecDefault {
       )
     },
     // Regression: production `mkr-community` had a `club_match_ref` row but no `club_match` row; before the
-    // `ClubMatchRef.findOrInfer` fix, `Club.slugFromMatchRef` consulted only `club_match` (via
+    // `ClubMatchRef.findOrInfer` fix, Tier B's `slugFromMatchRef` consulted only `club_match` (via
     // `ClubMatch.inferClubMatchRef`) and the rename recovery never fired.
     test(
       "404 + explicit club_match_ref only (no club_match row) → rediscovers via tier 1, retries, persists new slug"

@@ -4,12 +4,19 @@ import java.time.Instant
 
 import com.augustnagro.magnum.sql
 import zio.RIO
+import zio.http.{handler, long, Method, Request, Response, Routes}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiPlayerClubsJson, fakeChessComClient}
-import ccas.analysis.tables.{Club, ClubAdmin, ClubName, Player, Tables}
+import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{
+  apiClubJson,
+  apiDailyMatchJson,
+  apiPlayerClubsJson,
+  fakeChessComClient
+}
+import ccas.analysis.tables.{Club, ClubAdmin, ClubMatchRef, ClubName, Player, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username}
+import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -35,6 +42,9 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
       tierCSkipsSlugsAlreadyKnownToDb,
       tierCAdvancesPastAdminWhose404s,
       tierCNoOpWithoutHint
+    ),
+    suite("slugFromMatchRef (tier B)")(
+      slugFromMatchRefRejectsABoardNamingNoClub
     )
   ) @@ TestAspect.before(resetTables)).provideShared(
     FreshSchemaLayer(schema = "test_club_slug_rename_resolver", onInit = Tables.ensureTables)
@@ -328,5 +338,29 @@ object TestClubSlugRenameResolver extends ZIOSpecDefault {
         client <- fakeChessComClient(Map.empty)
         result <- ClubSlugRenameResolver.resolveAndPersist(client, staleSlug, None)
       } yield assertTrue(result.isEmpty)
+    }
+
+  // A board that names no club is a malformed response, not "no rename to be had": Tier B must see the difference,
+  // since its answer to absence is to move on quietly (ADR 0019).
+  private def slugFromMatchRefRejectsABoardNamingNoClub =
+    test("slugFromMatchRef fails when the board's team URL names no club") {
+      val club    = Club(ClubId(240), t0, ClubSlug("board-says-nothing"), "Boardless", None, None, None)
+      val matchId = ClubMatchId(9610)
+      val matchJson = apiDailyMatchJson(
+        matchId = ClubMatchId.unwrap(matchId),
+        team1Club = "renamed-club",
+        team2Club = "opponent-club",
+        team1Players = List(("p1", 1)),
+        team2Players = List(("p2", 1))
+      ).replace("https://api.chess.com/pub/club/renamed-club", "https://api.chess.com")
+      val routes = Routes(
+        Method.GET / "pub" / "match" / long("matchId") -> handler((_: Long, _: Request) => Response.json(matchJson))
+      )
+      for {
+        _ <- Club.upsert(club)
+        _ <- ClubMatchRef.insert(ClubMatchRef(clubId = club.clubId, matchId = matchId, isLive = false, isTeam1 = true))
+        client <- TestChessComClientSupport.fakeClient(routes)
+        result <- ClubSlugRenameResolver.slugFromMatchRef(club.clubId, client).either
+      } yield assertTrue(result.left.exists(_.isInstanceOf[IllegalArgumentException]))
     }
 }

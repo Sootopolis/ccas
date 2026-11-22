@@ -3,7 +3,7 @@ package ccas.server.jobs
 import zio.RIO
 
 import ccas.analysis.apps.NamedClub
-import ccas.api.misc.subtypes.JobRunId
+import ccas.analysis.tables.subtypes.JobRunId
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient

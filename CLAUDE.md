@@ -65,7 +65,7 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 
 **SQL.** Write methods return the number of rows affected, not `Unit`. Record names once per transaction (`Player.writeBatch` for batches; [0020](docs/adr/0020-claims-on-one-name-queue.md)). Never use `ChessComClient` inside `withTransaction`: the connection and locks would stay held across the round trip, and the client dies if you try (#300). Prefer `UNION ALL` over `UNION` where deduplication isn't needed. Magnum specifics: a custom `DbCodec` must not throw on `null`, because Magnum's `OptionCodec` reads the value *before* checking `wasNull`; and interpolating a bare enum case (`${TriggerType.Interval}`) into `sql""` emits no placeholder and produces a syntax error — widen the value to the enum type first.
 
-**Output files.** Apps that write reports go through `OutputFile` (`ccas.utils`), which owns the layout and archives earlier output. Don't hand-roll paths.
+**Output files.** Apps that write reports go through `OutputFile` (`ccas.analysis.apps`), which owns the layout and archives earlier output. Don't hand-roll paths.
 
 **Chess.com API behaviour.** The API misleads in specific, recorded ways: fields that lie, 404s that are not permanent, closed accounts that vanish from rosters while still members. Before writing code that decides what a response means — what a status, a timestamp, an absence or a 404 says — read [`docs/chess-com-api.md`](docs/chess-com-api.md), and record anything new you observe there, dated. A reported-not-found is an answer, not a failure: the client returns `FetchResult.Missing` and the app decides what absence means ([0019](docs/adr/0019-a-reported-404-is-an-answer.md)).
 

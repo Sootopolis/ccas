@@ -12,8 +12,6 @@ import zio.http.*
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
-import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, ClientConfig}
-import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.info.BuildInfo
 import ccas.utils.{HttpDate, ProgressBar, ProgressDisplay}
 import ccas.utils.errors.safeMessage

@@ -6,13 +6,20 @@ import scala.annotation.tailrec
 
 import zio.{Chunk, Clock, ExitCode, IO, NonEmptyChunk, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub}
+import ccas.analysis.apps.{
+  withClubSlugRenameRecovery,
+  ClubQuery,
+  ClubResolution,
+  ClubSlugRenameResolver,
+  NamedClub,
+  OutputFile
+}
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.*
-import ccas.analysis.tables.subtypes.MembershipRunId
+import ccas.analysis.tables.subtypes.{JobRunId, MembershipRunId}
 import ccas.api.club.ApiClubMembers
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId}
-import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
+import ccas.utils.{ProgressDisplay, TimeParser}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.{safeMessage, BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient

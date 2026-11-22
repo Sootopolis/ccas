@@ -1,9 +1,11 @@
 package ccas.analysis.apps
 
-import zio.{RIO, ZIO}
+import zio.{RIO, Task, ZIO}
 
-import ccas.analysis.tables.{Club, ClubAdmin, ClubName, Player, PlayerName}
+import ccas.analysis.apps.ref.RefHelpers
+import ccas.analysis.tables.{Club, ClubAdmin, ClubMatchRef, ClubName, Player, PlayerName}
 import ccas.api.club.ApiClub
+import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayerClubs
@@ -22,7 +24,7 @@ import ccas.utils.sql.PostgresClient
   *  - **Tier A (DB lookup)** — never fires HTTP: the name `club_name` says the hinted club holds now, when it
   *    differs from the stale input. A caller with no hint gets the one `club_name` gives: the club that holds the
   *    stale slug, or alone held it.
-  *  - **Tier B (match-ref endpoint)** — `Club.slugFromMatchRef`, which reads a `ClubMatchRef` board's team URL.
+  *  - **Tier B (match-ref endpoint)** — [[slugFromMatchRef]], which reads a `ClubMatchRef` board's team URL.
   *  - **Tier C (admin clubs)** — fetches each stored `ClubAdmin`'s `/pub/player/{username}/clubs` and looks for a
   *    slug whose `ApiClub.clubId` matches the hint. Bounded by the admin count, short-circuits on first hit, and
   *    closes the gap for a club that has never played a match.
@@ -108,9 +110,34 @@ object ClubSlugRenameResolver {
     staleSlug: ClubSlug
   ): RIO[PostgresClient, Option[ClubSlug]] =
     ZIO
-      .foreach(clubIdHint)(Club.slugFromMatchRef(_, client))
+      .foreach(clubIdHint)(slugFromMatchRef(_, client))
       .map(_.flatten.filter(_ != staleSlug))
       .swallowRecoveryErrors(s"Tier B slug recovery for $staleSlug")
+
+  /** The name the club's own match board reports for it. Reads a [[ClubMatchRef]], explicit row first and otherwise
+    * inferred from `club_match` and promoted via [[ClubMatchRef.findOrInfer]], then takes the slug from that board's
+    * team URL. `None` is every way this comes to nothing quietly: no ref to read, or a match Chess.com reports gone —
+    * Tier B's answer to both is "try Tier C" (ADR 0019, #258). A board whose team URL names no club is a malformed
+    * response rather than an absence, so it fails; #275 would have the decoder say that instead.
+    */
+  private[apps] def slugFromMatchRef(
+    clubId: ClubId,
+    client: ChessComClient
+  ): ZIO[PostgresClient, Throwable, Option[ClubSlug]] =
+    ClubMatchRef.findOrInfer(clubId).flatMap {
+      case None      => ZIO.none
+      case Some(ref) => teamsOfMatch(ref, client).flatMap(ZIO.foreach(_)(slugOfTeam(ref, _)))
+    }
+
+  private def teamsOfMatch(ref: ClubMatchRef, client: ChessComClient): Task[Option[TeamMatchTeams]] =
+    RefHelpers
+      .fetchTeamMatchTeamsResult(client, ref.matchId, ref.isLive)
+      .flatMap(_.foldZIO(_ => ZIO.none, _.getValue.asSome, _.getValue.asSome))
+
+  private def slugOfTeam(ref: ClubMatchRef, teams: TeamMatchTeams): Task[ClubSlug] =
+    ZIO.attempt(ClubSlug.fromUrl(if (ref.isTeam1) {
+      teams.team1.`@id`
+    } else { teams.team2.`@id` }))
 
   /** Resolves a candidate fresh slug. Errors are swallowed (debug-logged when non-HTTP) so the caller's original 404
     * is never replaced with a recovery-internal failure.

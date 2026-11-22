@@ -7,7 +7,7 @@ import java.time.temporal.ChronoUnit
 import zio.{duration2DurationOps, Clock, RIO, Scope, ZIO, ZIOAppDefault}
 
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.BodyStore
+import ccas.utils.client.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, BodyStore, ClientConfig, ClientStats}
 import ccas.utils.sql.PostgresClient
 
 object Tables extends ZIOAppDefault {

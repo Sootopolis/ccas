@@ -4,11 +4,11 @@ import java.time.{Duration, Instant}
 
 import zio.{Chunk, Clock, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.{ClubQuery, ClubResolution}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, OutputFile}
 import ccas.analysis.apps.stats.StatsUtils.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.utils.{OutputFile, ProgressDisplay, TimeParser}
+import ccas.utils.{ProgressDisplay, TimeParser}
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 

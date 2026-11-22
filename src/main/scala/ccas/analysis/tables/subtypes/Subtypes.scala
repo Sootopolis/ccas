@@ -1,23 +1,12 @@
 package ccas.analysis.tables.subtypes
 
-import ccas.utils.opaque.PositiveLongCompanion
+import com.github.f4b6a3.ulid.UlidCreator
 
-/** Internal DB-surrogate id types. Kept separate from `ccas.api.misc.subtypes`, which holds Chess.com domain types
-  * like `PlayerId` / `ClubId` / `ClubMatchId` — these, by contrast, identify rows in our own PostgreSQL tables.
-  *
-  * All extend `PositiveLongCompanion` (`> 0L` validator): surrogate keys from `BIGSERIAL` start at 1 and only grow,
-  * so zero is not a valid id for an existing row. The domain-id validators in `ccas.api.misc.subtypes` are looser
-  * (`>= 0L`); the difference is intentional but the looser bound there has not been pinned to a specific Chess.com
-  * id observed at zero.
-  */
+import ccas.utils.opaque.{PositiveLongCompanion, StringCompanion}
 
-type ApiResponseBodyId = ApiResponseBodyId.Type
-
-object ApiResponseBodyId extends PositiveLongCompanion
-
-type ApiResponseCacheId = ApiResponseCacheId.Type
-
-object ApiResponseCacheId extends PositiveLongCompanion
+// Ids we mint for rows in our own tables; Chess.com's ids are in `ccas.api.misc.subtypes`, the client's cache ids in
+// `ccas.utils.client`. The run ids are `BIGSERIAL` surrogates, so `PositiveLongCompanion` refuses 0, which Chess.com's
+// ids allow: deliberate, though no Chess.com id has been seen at 0.
 
 type RecruitmentRunId = RecruitmentRunId.Type
 
@@ -30,3 +19,10 @@ object HistoryRunId extends PositiveLongCompanion
 type MembershipRunId = MembershipRunId.Type
 
 object MembershipRunId extends PositiveLongCompanion
+
+/** A server job's id: a ULID minted when the job is submitted, which the analysis run tables carry back to it. */
+type JobRunId = JobRunId.Type
+
+object JobRunId extends StringCompanion {
+  def generate(): JobRunId = wrap(UlidCreator.getMonotonicUlid().toString)
+}

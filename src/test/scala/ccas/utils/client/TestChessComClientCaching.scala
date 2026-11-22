@@ -10,8 +10,7 @@ import zio.http.*
 import zio.json.JsonDecoder
 import zio.test.*
 
-import ccas.analysis.tables.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, Tables}
-import ccas.analysis.tables.subtypes.ApiResponseBodyId
+import ccas.analysis.tables.Tables
 import ccas.utils.client.TestChessComClientSupport.*
 import ccas.utils.json.JsonDecodingException
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}

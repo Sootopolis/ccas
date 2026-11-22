@@ -7,7 +7,14 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.makeCriteria
-import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentAlias, RecruitmentCriteria, RejectionCount}
+import ccas.analysis.tables.{
+  CandidateOutcome,
+  PlayerRecruitmentCache,
+  RecruitmentAlias,
+  RecruitmentCriteria,
+  RejectionCount,
+  RejectionReason
+}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, PlayerId}
 
 object TestRecruitmentPure extends ZIOSpecDefault {
