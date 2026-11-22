@@ -14,9 +14,11 @@ import ccas.server.routes.JobRoutes.{ClubJobResult, InvitedUsernames, Recruitmen
 import ccas.server.routes.RecruitmentCriteriaRoutes.CriteriaView
 
 /** An interactive `ccas recruit` shows the criteria it would run under and asks before submitting, then asks before
-  * marking invites (#485): through [[Dispatcher.confirmCriteria]] with a submit that records what it was asked to run,
-  * through [[Dispatcher.scout]] for what a confirmed run sends, and through [[Dispatcher.dispatch]] for a run with no
-  * terminal, against a [[FakeCcasServer]] that knows one set of criteria of one club.
+  * marking invites (#485), calling the operator back to that second question (#533): through
+  * [[Dispatcher.confirmCriteria]] with a submit that records what it was asked to run, through [[Dispatcher.scout]]
+  * for what a confirmed run sends, through [[Dispatcher.dispatch]] for a run with no terminal, and through
+  * [[Dispatcher.confirmFlow]] for the invite prompt, against a [[FakeCcasServer]] that knows one set of criteria of
+  * one club.
   */
 object TestRecruitConfirm extends ZIOSpecDefault {
 
@@ -160,18 +162,39 @@ object TestRecruitConfirm extends ZIOSpecDefault {
       )
     },
     test("the invite prompt names the club the candidates are invited to") {
-      val found = Method.GET / "api" / "jobs" / string("jobId") / "recruitment" / "found" -> handler {
-        (_: String, _: Request) => FakeCcasServer.json(InvitedUsernames(List("alice")))
-      }
       for {
-        _   <- TestConsole.feedLines("n")
-        api <- FakeCcasServer.api(Routes(found))
-        _   <- Dispatcher.confirmFlow(api, "team-alpha", "job-1")
-        out <- output
+        prompted <- invitePrompt(List("alice"))
       } yield assertTrue(
-        out.contains("Mark all 1 as invited to team-alpha and copy to clipboard? [Y/n]"),
-        out.contains("Left 1 as deferred")
+        prompted.output.contains("Mark all 1 as invited to team-alpha and copy to clipboard? [Y/n]"),
+        prompted.output.contains("Left 1 as deferred")
       )
+    },
+    test("the invite prompt alerts as it opens, naming how many candidates wait and for which club") {
+      for {
+        prompted <- invitePrompt(List("alice", "bob"))
+      } yield assertTrue(prompted.alerts == List("2 found for team-alpha: confirm the invites"))
+    },
+    test("a run that found no candidates raises no alert") {
+      for {
+        prompted <- invitePrompt(Nil)
+      } yield assertTrue(prompted.output.contains("No candidates found."), prompted.alerts.isEmpty)
     }
   )
+
+  private case class Prompted(output: String, alerts: List[String])
+
+  /** Runs the invite prompt for a job that found `names`, declining it, and returns what it printed and each alert. */
+  private def invitePrompt(names: List[String]): Task[Prompted] = {
+    val found = Method.GET / "api" / "jobs" / string("jobId") / "recruitment" / "found" -> handler {
+      (_: String, _: Request) => FakeCcasServer.json(InvitedUsernames(names))
+    }
+    for {
+      alerts <- Ref.make(List.empty[String])
+      _      <- TestConsole.feedLines("n")
+      api    <- FakeCcasServer.api(Routes(found))
+      _      <- Dispatcher.confirmFlow(api, "team-alpha", "job-1", text => alerts.update(_ :+ text))
+      out    <- output
+      sent   <- alerts.get
+    } yield Prompted(out, sent)
+  }
 }
