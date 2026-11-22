@@ -861,7 +861,8 @@ object Dispatcher {
   ): Task[Int] =
     if (stdout) { follower.handleClub(result, logsToStderr = true, onComplete = deliverInvited(api, _)) }
     else if (interactiveConfirm) {
-      follower.handleClub(result, logsToStderr = false, onComplete = confirmFlow(api, result.club, _))
+      val alert = Attention.alert("ccas recruit")
+      follower.handleClub(result, logsToStderr = false, onComplete = confirmFlow(api, result.club, _, alert))
     } else { follower.handleClub(result, logsToStderr = true, onComplete = deferReport(api, _)) }
 
   // Fetch a completed auto-confirm scout's invited usernames and print them bare to stdout. A fetch/decode failure is
@@ -888,18 +889,33 @@ object Dispatcher {
   // Deferred-confirm flow: the scout left candidates Deferred. Show them, ask, and only then flip to Invited + copy.
   // Declining (or a read failure defaulting to "n") leaves them Deferred — nobody is burned, and they resurface.
   // `club` is the job's label, which for a club that ran is its slug: the prompt names the club the invites are for.
-  private[cli] def confirmFlow(api: CcasApiClient, club: String, jobId: String): Task[Unit] =
+  private[cli] def confirmFlow(
+    api: CcasApiClient,
+    club: String,
+    jobId: String,
+    alert: String => UIO[Unit]
+  ): Task[Unit] =
     api.getJson[InvitedUsernames](s"/api/jobs/$jobId/recruitment/found").flatMap { found =>
       if (found.usernames.isEmpty) { Console.printLine("No candidates found.").orDie }
-      else { confirmPrompt(api, club, jobId, found.usernames) }
+      else { confirmPrompt(api, club, jobId, found.usernames, alert) }
     }.catchAll(confirmFailed)
 
-  private def confirmPrompt(api: CcasApiClient, club: String, jobId: String, names: List[String]): Task[Unit] =
+  private def confirmPrompt(
+    api: CcasApiClient,
+    club: String,
+    jobId: String,
+    names: List[String],
+    alert: String => UIO[Unit]
+  ): Task[Unit] =
     for {
-      _    <- Console.printLine(s"\nFound ${names.size} candidates:").orDie
-      _    <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  ${profileUrlLine(n)}").orDie)
-      _    <- Console.printLine("").orDie
-      mark <- YesNo.ask(s"Mark all ${names.size} as invited to $club and copy to clipboard?", default = true)
+      _ <- Console.printLine(s"\nFound ${names.size} candidates:").orDie
+      _ <- ZIO.foreachDiscard(names)(n => Console.printLine(s"  ${profileUrlLine(n)}").orDie)
+      _ <- Console.printLine("").orDie
+      // Asked minutes after the command was typed, so the operator may have looked away (#533).
+      waiting = alert(s"${names.size} found for $club: confirm the invites")
+      mark <- Attention.whileWaiting(waiting, Attention.Every, Attention.Repeats) {
+        YesNo.ask(s"Mark all ${names.size} as invited to $club and copy to clipboard?", default = true)
+      }
       _ <-
         if (mark) { confirmAndCopy(api, jobId) }
         else { Console.printLine(s"Left ${names.size} as deferred; they'll resurface on the next run.").orDie }
@@ -1024,16 +1040,14 @@ object Dispatcher {
       }
     }
 
-  // The native clipboard command for this environment, if any: macOS -> pbcopy; Wayland -> wl-copy; X11 -> xclip.
-  // None on a headless / unknown session, which routes to the OSC 52 fallback.
+  // The native clipboard command for this session, if any; none routes to the OSC 52 fallback.
   private def clipboardCommand: Option[List[String]] =
-    if (isMac) { Some(List("pbcopy")) }
-    else if (envSet("WAYLAND_DISPLAY")) { Some(List("wl-copy")) }
-    else if (envSet("DISPLAY")) { Some(List("xclip", "-selection", "clipboard")) }
-    else { None }
-
-  private def isMac: Boolean                = sys.props.getOrElse("os.name", "").toLowerCase.contains("mac")
-  private def envSet(name: String): Boolean = Option(java.lang.System.getenv(name)).exists(_.nonEmpty)
+    Desktop.current match {
+      case Desktop.Mac      => Some(List("pbcopy"))
+      case Desktop.Wayland  => Some(List("wl-copy"))
+      case Desktop.X11      => Some(List("xclip", "-selection", "clipboard"))
+      case Desktop.Headless => None
+    }
 
   // Feed `payload` to the clipboard tool's stdin, then wait. Returns true only if the process
   // launched and exited 0; a launch failure (tool not installed -> IOException) or non-zero exit yields false so the
