@@ -4,15 +4,15 @@ import java.time.Instant
 
 import com.augustnagro.magnum.sql
 import zio.http.URL
-import zio.test.{assertTrue, Spec, ZIOSpecDefault}
+import zio.test.{assertTrue, typeCheck, Spec, ZIOSpecDefault}
 
 import ccas.analysis.tables.RunTrigger
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.connectZIO
 
-/** Our codecs read SQL NULL through Magnum's `readSingleOption`, never as `Some(null)` (#536). Each test selects a
-  * literal, so the suite needs no tables.
+/** Our codecs read SQL NULL through Magnum's `readSingleOption`, never as `Some(null)` (#536), and a list binds only
+  * element types stored as their raw value (#538). Each test selects a literal, so the suite needs no tables.
   */
 object TestDbCodecs extends ZIOSpecDefault {
 
@@ -25,7 +25,10 @@ object TestDbCodecs extends ZIOSpecDefault {
     testAbsentArray,
     testPresentValuesReadBack,
     testNullIntoNonOptionFails,
-    testBareEnumCaseIsBound
+    testBareEnumCaseIsBound,
+    testListArrayTypes,
+    testListsReadBack,
+    testUnencodableListsDoNotCompile
   ).provideShared(FreshSchemaLayer("test_db_codecs"))
 
   private def testAbsentOpaqueString = test("an absent opaque string reads as None") {
@@ -86,4 +89,42 @@ object TestDbCodecs extends ZIOSpecDefault {
       assertTrue(frag.sqlString == "SELECT ?", rows == Vector(RunTrigger.Dependency))
     }
   }
+
+  private val strings   = List("a", "b")
+  private val longs     = List(1L, 2L)
+  private val ints      = List(1, 2)
+  private val usernames = List(Username("Someone"), Username("Else"))
+  private val playerIds = List(PlayerId(42L), PlayerId(43L))
+
+  private def testListArrayTypes =
+    test(
+      "a list binds as an array of its element's column type: text, bigint, integer, opaque string and opaque number"
+    ) {
+      connectZIO {
+        sql"""SELECT pg_typeof($strings)::text, pg_typeof($longs)::text, pg_typeof($ints)::text,
+                     pg_typeof($usernames)::text, pg_typeof($playerIds)::text"""
+          .query[(String, String, String, String, String)]
+          .run()
+      }.map(rows => assertTrue(rows == Vector(("text[]", "bigint[]", "integer[]", "text[]", "bigint[]"))))
+    }
+
+  private def testListsReadBack = test("a list of each array element type reads back as itself") {
+    connectZIO {
+      sql"SELECT $strings, $longs, $ints, $usernames, $playerIds"
+        .query[(List[String], List[Long], List[Int], List[Username], List[PlayerId])]
+        .run()
+    }.map(rows => assertTrue(rows == Vector((strings, longs, ints, usernames, playerIds))))
+  }
+
+  // `typeCheck` compiles each snippet against this file's imports, so it sees the same givens as a table's SQL.
+  private def testUnencodableListsDoNotCompile =
+    test("a list of an enum or a URL does not compile, since neither is stored as its raw value") {
+      for {
+        enumList <- typeCheck("sql\"SELECT ${List(RunTrigger.Scheduled)}\"")
+        urlList  <- typeCheck("sql\"SELECT ${List.empty[URL]}\"")
+      } yield assertTrue(
+        enumList.left.exists(_.contains("List[ccas.analysis.tables.RunTrigger]")),
+        urlList.left.exists(_.contains("List[zio.http.URL]"))
+      )
+    }
 }
