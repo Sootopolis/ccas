@@ -17,15 +17,11 @@ object DbCodecs {
     from = _.encode
   )
 
-  given listCodec[T: DbCodec as dbCodec]: DbCodec[List[T]] = new DbCodec[List[T]] {
+  /** A list as a PostgreSQL array. One whose element has no `ArrayElement` gets no codec, so Magnum reports a missing
+    * `DbCodec` for the list.
+    */
+  given listCodec[T: {DbCodec as dbCodec, ArrayElement as element}]: DbCodec[List[T]] = new DbCodec[List[T]] {
     override def cols: IArray[Int] = IArray(Types.ARRAY)
-
-    private val (sqlTypeName, toJdbc) = dbCodec.cols(0) match {
-      case Types.VARCHAR | Types.LONGVARCHAR => ("TEXT", (v: T) => v.asInstanceOf[AnyRef])
-      case Types.BIGINT                      => ("BIGINT", (v: T) => Long.box(v.asInstanceOf[Long]))
-      case Types.INTEGER                     => ("INTEGER", (v: T) => Int.box(v.asInstanceOf[Int]))
-      case other => throw IllegalStateException(s"Unsupported array element JDBC type: $other")
-    }
 
     private def decode(arr: SqlArray): List[T] =
       try {
@@ -44,7 +40,7 @@ object DbCodecs {
       Option(rs.getArray(pos)).map(decode)
 
     override def writeSingle(value: List[T], ps: PreparedStatement, pos: Int): Unit =
-      val arr = ps.getConnection.createArrayOf(sqlTypeName, value.map(toJdbc).toArray)
+      val arr = ps.getConnection.createArrayOf(element.sqlTypeName, value.map(element.toJdbc).toArray)
       ps.setArray(pos, arr)
 
     override def queryRepr: String = "?"

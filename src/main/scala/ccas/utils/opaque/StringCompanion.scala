@@ -7,6 +7,7 @@ import zio.config.magnolia.DeriveConfig
 import zio.json.{JsonCodec, JsonDecoder, JsonEncoder}
 
 import ccas.utils.opaque.OpaqueHelpers.orThrowDbRead
+import ccas.utils.sql.ArrayElement
 
 trait StringCompanion {
   opaque type Type = String
@@ -30,6 +31,7 @@ trait StringCompanion {
   given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder
   given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
   given DbCodec[Type]      = DbCodec[String].biMap(validated(_).orThrowDbRead(name), unwrap)
+  given ArrayElement[Type] = ArrayElement.text(unwrap)
   given DeriveConfig[Type] = DeriveConfig[String].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
   given Ordering[Type]     = Ordering.by(unwrap)
 

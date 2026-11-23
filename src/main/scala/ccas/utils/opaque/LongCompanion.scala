@@ -5,6 +5,8 @@ import zio.Config
 import zio.config.magnolia.DeriveConfig
 import zio.json.JsonCodec
 
+import ccas.utils.sql.ArrayElement
+
 trait LongCompanion extends BaseNumericCompanion[Long] {
   opaque type Type = Long
 
@@ -19,6 +21,8 @@ trait LongCompanion extends BaseNumericCompanion[Long] {
   protected def baseDbCodec: DbCodec[Long]           = DbCodec.LongCodec
   protected def baseDeriveConfig: DeriveConfig[Long] = DeriveConfig(Config.long)
   protected def baseOrdering: Ordering[Long]         = Ordering.Long
+
+  given ArrayElement[Type] = ArrayElement.bigint(unwrap)
 }
 
 /** `LongCompanion` with a `> 0L` validator. Use for surrogate keys backed by `BIGSERIAL`,
