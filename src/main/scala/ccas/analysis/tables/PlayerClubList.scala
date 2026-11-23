@@ -9,7 +9,6 @@ import zio.ZIO
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
@@ -74,7 +73,7 @@ object PlayerClubList {
       sql"""SELECT p.player_id, pn.username FROM player p
             JOIN player_name pn ON pn.player_id = p.player_id AND pn.until IS NULL
             LEFT JOIN player_club_list l ON l.player_id = p.player_id
-            WHERE p.status <> ${Active: PlayerStatusCategory} AND (l.player_id IS NULL OR l.fetched_at < p.since)
+            WHERE p.status <> ${Active} AND (l.player_id IS NULL OR l.fetched_at < p.since)
               AND (EXISTS (SELECT 1 FROM club_member cm WHERE cm.club_id = $clubId AND cm.player_id = p.player_id)
                 OR EXISTS (SELECT 1 FROM club_match_board b JOIN club_match m ON m.match_id = b.match_id
                            WHERE (m.team1_club_id = $clubId AND b.team1_player_id = p.player_id)
@@ -90,7 +89,7 @@ object PlayerClubList {
       sql"""SELECT l.player_id, l.last_online, e.joined, p.status FROM player_club_list l
             JOIN player p ON p.player_id = l.player_id
             JOIN player_club_list_entry e ON e.player_id = l.player_id
-            WHERE p.status <> ${Active: PlayerStatusCategory} AND l.fetched_at >= p.since
+            WHERE p.status <> ${Active} AND l.fetched_at >= p.since
               AND e.club_slug IN (SELECT slug FROM club_name WHERE club_id = $clubId)""".query[Listing].run().toList
     }
 }

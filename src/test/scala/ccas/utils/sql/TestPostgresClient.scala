@@ -336,13 +336,13 @@ object TestPostgresClient extends ZIOSpecDefault {
   private def testIsHikariDataSource = test("underlying DataSource is HikariDataSource") {
     for {
       pgClient <- ZIO.service[PostgresClient]
-    } yield assertTrue(pgClient.transactor.dataSource.isInstanceOf[HikariDataSource])
+    } yield assertTrue(pgClient.dataSource.isInstanceOf[HikariDataSource])
   }
 
   private def testPoolConfigApplied = test("pool config is applied from application.conf") {
     for {
       pgClient <- ZIO.service[PostgresClient]
-      hikariDs = pgClient.transactor.dataSource.asInstanceOf[HikariDataSource]
+      hikariDs = pgClient.dataSource.asInstanceOf[HikariDataSource]
     } yield assertTrue(
       hikariDs.getMaximumPoolSize == 3,
       hikariDs.getMinimumIdle == 1,
@@ -355,7 +355,7 @@ object TestPostgresClient extends ZIOSpecDefault {
       pgClient <- ZIO.service[PostgresClient]
       result <- ZIO.scoped {
         for {
-          conn <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(pgClient.transactor.dataSource.getConnection))
+          conn <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(pgClient.dataSource.getConnection))
           stmt <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(conn.createStatement()))
           value <- ZIO.attemptBlocking {
             val rs = stmt.executeQuery("SELECT 1")
@@ -372,7 +372,7 @@ object TestPostgresClient extends ZIOSpecDefault {
       pgClient <- ZIO.service[PostgresClient]
       exists <- ZIO.scoped {
         for {
-          conn <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(pgClient.transactor.dataSource.getConnection))
+          conn <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(pgClient.dataSource.getConnection))
           stmt <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(conn.createStatement()))
           found <- ZIO.attemptBlocking {
             val rs = stmt.executeQuery(
@@ -390,7 +390,7 @@ object TestPostgresClient extends ZIOSpecDefault {
       hikariDs <- ZIO.scoped {
         for {
           xa <- PostgresClient.live(schema = Some("test_dsl_close")).build
-          ds = xa.get[PostgresClient].transactor.dataSource.asInstanceOf[HikariDataSource]
+          ds = xa.get[PostgresClient].dataSource.asInstanceOf[HikariDataSource]
         } yield ds
       }
     } yield assertTrue(hikariDs.isClosed)
@@ -403,7 +403,7 @@ object TestPostgresClient extends ZIOSpecDefault {
     ZIO.scoped {
       for {
         xa <- PostgresClient.live(prefix = "databaseNoSchema").build
-        hikariDs = xa.get[PostgresClient].transactor.dataSource.asInstanceOf[HikariDataSource]
+        hikariDs = xa.get[PostgresClient].dataSource.asInstanceOf[HikariDataSource]
       } yield assertTrue(hikariDs.getSchema == null)
     }
   }

@@ -10,7 +10,7 @@ object Versions {
   val vZioConfig   = "4.1.2"
   val vZioHttp     = "3.11.4"
   val vZioJson     = "0.10.0"
-  val vMagnum      = "1.3.1"
+  val vMagnum      = "2.0.0"
   val vPostgresql  = "42.7.14"
   val vHikari      = "7.1.0"
   val vUlidCreator = "5.2.4"

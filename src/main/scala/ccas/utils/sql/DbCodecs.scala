@@ -1,35 +1,20 @@
 package ccas.utils.sql
 
-import java.sql.{PreparedStatement, ResultSet, Types}
-import java.time.{Instant, OffsetDateTime, ZoneOffset}
+import java.sql.{Array as SqlArray, PreparedStatement, ResultSet, Types}
+
+import scala.util.Using
 
 import com.augustnagro.magnum.DbCodec
 import zio.http.URL
 
 object DbCodecs {
-  given DbCodec[Instant] = new DbCodec[Instant] {
-    override def cols: IArray[Int] = IArray(Types.TIMESTAMP_WITH_TIMEZONE)
-    override def readSingle(rs: ResultSet, pos: Int): Instant =
-      val odt = rs.getObject(pos, classOf[OffsetDateTime])
-      if (odt == null) { null }
-      else { odt.toInstant }
-    override def writeSingle(value: Instant, ps: PreparedStatement, pos: Int): Unit =
-      ps.setObject(pos, value.atOffset(ZoneOffset.UTC))
-    override def queryRepr: String = "?"
-  }
-
   given DbCodec[URL] = DbCodec[String].biMap(
     to = string =>
-      if (string == null) { null }
-      else {
-        URL.decode(string).fold(
-          _ => throw new IllegalStateException(s"Malformed URL in database: $string"),
-          identity
-        )
-      },
-    from = url =>
-      if (url == null) { null }
-      else { url.encode }
+      URL.decode(string).fold(
+        _ => throw new IllegalStateException(s"Malformed URL in database: $string"),
+        identity
+      ),
+    from = _.encode
   )
 
   given listCodec[T: DbCodec as dbCodec]: DbCodec[List[T]] = new DbCodec[List[T]] {
@@ -42,17 +27,21 @@ object DbCodecs {
       case other => throw IllegalStateException(s"Unsupported array element JDBC type: $other")
     }
 
+    private def decode(arr: SqlArray): List[T] =
+      try {
+        Using.resource(arr.getResultSet) { innerRs =>
+          val builder = List.newBuilder[T]
+          while (innerRs.next())
+            builder += dbCodec.readSingle(innerRs, 2)
+          builder.result()
+        }
+      } finally arr.free()
+
     override def readSingle(rs: ResultSet, pos: Int): List[T] =
-      val arr = rs.getArray(pos)
-      if (arr == null) { Nil }
-      else {
-        val innerRs = arr.getResultSet
-        val builder = List.newBuilder[T]
-        while (innerRs.next())
-          builder += dbCodec.readSingle(innerRs, 2)
-        innerRs.close()
-        builder.result()
-      }
+      readSingleOption(rs, pos).getOrElse(Nil)
+
+    override def readSingleOption(rs: ResultSet, pos: Int): Option[List[T]] =
+      Option(rs.getArray(pos)).map(decode)
 
     override def writeSingle(value: List[T], ps: PreparedStatement, pos: Int): Unit =
       val arr = ps.getConnection.createArrayOf(sqlTypeName, value.map(toJdbc).toArray)

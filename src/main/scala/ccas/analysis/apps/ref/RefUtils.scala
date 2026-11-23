@@ -3,6 +3,7 @@ package ccas.analysis.apps.ref
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
+import com.augustnagro.magnum.DbCodec
 import zio.{Promise, Ref, UIO}
 import zio.http.URL
 
@@ -14,9 +15,10 @@ import ccas.utils.errors.safeMessage
 
 private[ref] object RefUtils {
 
-  final case class UnresolvedPlayer(playerId: PlayerId, username: Username)
-  final case class UnresolvedClub(clubId: ClubId, slug: ClubSlug)
+  final case class UnresolvedPlayer(playerId: PlayerId, username: Username) derives DbCodec
+  final case class UnresolvedClub(clubId: ClubId, slug: ClubSlug) derives DbCodec
   final case class TournamentRefPlayer(playerId: PlayerId, username: Username, tournamentSlug: TournamentSlug)
+      derives DbCodec
   case class SkippedPlayer(playerId: PlayerId, username: Username)
 
   enum ResolveResult {

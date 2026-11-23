@@ -13,7 +13,6 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.TestChessComClientSupport
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.connectZIO
 
 /** A History run stamps its own row from the app clock, as `JobRunner` stamps the job's (#509). */

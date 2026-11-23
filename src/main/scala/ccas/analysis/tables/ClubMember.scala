@@ -9,7 +9,6 @@ import zio.ZIO
 import ccas.api.misc.enums.PlayerStatusCategory
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{ClubId, PlayerId}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
@@ -118,7 +117,7 @@ object ClubMember {
       sql"""SELECT cm.club_id, cm.player_id, cm.since, cm.last_seen, cm.until FROM club_member cm
             JOIN player p ON p.player_id = cm.player_id
             WHERE cm.club_id = $clubId AND cm.until IS NULL
-              AND (cm.last_seen IS NULL OR p.status = ${Active: PlayerStatusCategory})""".query[ClubMember].run().toList
+              AND (cm.last_seen IS NULL OR p.status = ${Active})""".query[ClubMember].run().toList
     )
 
   def insert(item: ClubMember): ZIO[PostgresClient, SQLException, Int] =

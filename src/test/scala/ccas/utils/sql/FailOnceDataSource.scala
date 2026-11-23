@@ -36,7 +36,7 @@ private[ccas] object FailOnceDataSource {
 
   /** A client on `base`'s database whose first connection fails, and the data source that counts its attempts. */
   def rig(base: PostgresClient, transient: Boolean): (PostgresClient, FailOnceDataSource) = {
-    val failDs = new FailOnceDataSource(base.transactor.dataSource, transient)
+    val failDs = new FailOnceDataSource(base.dataSource, transient)
     val client = PostgresClient.fromDataSource(dataSource = failDs, retryBaseDelay = 10.millis, retryMaxRetries = 3)
     (client, failDs)
   }

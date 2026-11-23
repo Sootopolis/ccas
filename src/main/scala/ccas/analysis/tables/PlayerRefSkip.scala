@@ -9,7 +9,6 @@ import zio.ZIO
 import RefSkipReason.given
 
 import ccas.api.misc.subtypes.PlayerId
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 

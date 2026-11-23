@@ -26,15 +26,10 @@ trait StringCompanion {
     validateRaw(n).map(_ => n)
   }
 
-  given JsonCodec[Type]   = JsonCodec.string.transformOrFail(validated, unwrap)
-  given JsonDecoder[Type] = summon[JsonCodec[Type]].decoder
-  given JsonEncoder[Type] = summon[JsonCodec[Type]].encoder
-  // Null passthrough is required: Magnum's OptionCodec calls the inner readSingle
-  // *before* checking rs.wasNull, so returning null here lets Option[Type] columns work.
-  given DbCodec[Type] = DbCodec[String].biMap(
-    to = raw => if (raw == null) raw else validated(raw).orThrowDbRead(name),
-    from = unwrap
-  )
+  given JsonCodec[Type]    = JsonCodec.string.transformOrFail(validated, unwrap)
+  given JsonDecoder[Type]  = summon[JsonCodec[Type]].decoder
+  given JsonEncoder[Type]  = summon[JsonCodec[Type]].encoder
+  given DbCodec[Type]      = DbCodec[String].biMap(validated(_).orThrowDbRead(name), unwrap)
   given DeriveConfig[Type] = DeriveConfig[String].mapOrFail(validated(_).left.map(InvalidData(Chunk.empty, _)))
   given Ordering[Type]     = Ordering.by(unwrap)
 

@@ -7,7 +7,6 @@ import com.augustnagro.magnum.sql
 import zio.{durationInt, Promise, ZIO}
 import zio.test.Live
 
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 
 /** Makes two writers overlap every time, rather than only when the scheduler happens to interleave them. */

@@ -12,7 +12,6 @@ import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, Sk
 import ccas.utils.{display, ApiConcurrency, ProgressDisplay}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.BadRequestException
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 

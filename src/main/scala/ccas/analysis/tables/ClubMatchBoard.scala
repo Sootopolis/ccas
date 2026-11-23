@@ -8,7 +8,6 @@ import zio.ZIO
 
 import ccas.api.misc.enums.TimeClass
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, PlayerId}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
@@ -63,9 +62,8 @@ object ClubMatchBoard {
     */
   def inferPlayerMatchRef(playerId: PlayerId): ZIO[PostgresClient, SQLException, Option[PlayerMatchRef]] =
     connectZIO {
-      val daily: TimeClass = TimeClass.Daily
       sql"""SELECT cmb.match_id, cmb.board AS board_idx, (cmb.team1_player_id = $playerId) AS is_team1,
-                   (cm.time_class != $daily) AS is_live
+                   (cm.time_class != ${TimeClass.Daily}) AS is_live
             FROM club_match_board cmb
             JOIN club_match cm ON cm.match_id = cmb.match_id
             WHERE cmb.team1_player_id = $playerId OR cmb.team2_player_id = $playerId

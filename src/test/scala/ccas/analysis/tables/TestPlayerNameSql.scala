@@ -10,7 +10,6 @@ import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 import ccas.api.misc.enums.PlayerStatusCategory.Active
 import ccas.api.misc.subtypes.{PlayerId, Username}
 import ccas.utils.sql.{ForcedOverlap, FreshSchemaLayer, PostgresClient}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 
 /** `player_name` is kept in step with every write of `player.username`, backfilled from what `player` stores, and its

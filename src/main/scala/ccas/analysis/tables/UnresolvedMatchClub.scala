@@ -7,7 +7,6 @@ import com.augustnagro.magnum.*
 import zio.ZIO
 
 import ccas.api.misc.subtypes.{ClubMatchId, ClubSlug}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 

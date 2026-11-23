@@ -9,7 +9,6 @@ import zio.ZIO
 import ccas.api.misc.subtypes.ClubId
 import ccas.utils.sql.AdvisoryLock
 import ccas.utils.sql.AdvisoryLock.Space
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 

@@ -15,7 +15,6 @@ import ccas.server.jobs.JobKind
 import ccas.server.jobs.JobKind.given
 import ccas.server.scheduler.MisfirePolicy.given
 import ccas.server.scheduler.TriggerType.given
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -152,11 +151,6 @@ object JobSchedule {
     "id, kind, club_id, params, trigger_type, interval_hours, cron_expr, timezone, misfire_policy, enabled, last_run_at"
   )
 
-  // Typed as `TriggerType` (not the singleton `TriggerType.Interval.type`) so Magnum's `sql` interpolation summons
-  // `DbCodec[TriggerType]` and emits a bound `?` — interpolating the bare enum case emits nothing. Boot seeds are
-  // always interval-triggered.
-  private val intervalTrigger: TriggerType = TriggerType.Interval
-
   /** Smart constructor for an interval-triggered schedule (cron columns NULL). */
   def interval(
     id: Long,
@@ -261,7 +255,7 @@ object JobSchedule {
     connectZIO {
       sql"""INSERT INTO job_schedule
               (kind, club_id, params, trigger_type, interval_hours, cron_expr, timezone, misfire_policy, enabled, last_run_at)
-            SELECT ${seed.kind}, NULL, NULL, $intervalTrigger, ${seed.intervalHours}, NULL, NULL, NULL, ${seed.enabled}, NULL
+            SELECT ${seed.kind}, NULL, NULL, ${TriggerType.Interval}, ${seed.intervalHours}, NULL, NULL, NULL, ${seed.enabled}, NULL
             WHERE NOT EXISTS (
               SELECT 1 FROM job_schedule WHERE kind = ${seed.kind} AND club_id IS NULL
             )""".update.run()
@@ -279,7 +273,7 @@ object JobSchedule {
     connectZIO {
       sql"""INSERT INTO job_schedule
               (kind, club_id, params, trigger_type, interval_hours, cron_expr, timezone, misfire_policy, enabled, last_run_at)
-            VALUES (${seed.kind}, $clubId, NULL, $intervalTrigger, ${seed.intervalHours}, NULL, NULL, NULL, ${seed.enabled}, NULL)
+            VALUES (${seed.kind}, $clubId, NULL, ${TriggerType.Interval}, ${seed.intervalHours}, NULL, NULL, NULL, ${seed.enabled}, NULL)
             ON CONFLICT (kind, club_id) DO NOTHING""".update.run()
     }
 
