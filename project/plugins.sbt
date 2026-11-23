@@ -1,5 +1,5 @@
-addSbtPlugin("com.eed3si9n"   % "sbt-buildinfo"       % "0.13.1")
+addSbtPlugin("com.eed3si9n"   % "sbt-buildinfo"       % "0.14.0")
 addSbtPlugin("org.scalameta"  % "sbt-scalafmt"        % "2.6.2")
-addSbtPlugin("com.github.sbt" % "sbt-native-packager" % "1.11.7")
-addSbtPlugin("ch.epfl.scala"  % "sbt-scalafix"        % "0.14.9")
+addSbtPlugin("com.github.sbt" % "sbt-native-packager" % "1.13.0")
+addSbtPlugin("ch.epfl.scala"  % "sbt-scalafix"        % "0.14.10")
 addSbtPlugin("com.siriusxm"   % "sbt-snapshot4s"      % "0.2.11")
