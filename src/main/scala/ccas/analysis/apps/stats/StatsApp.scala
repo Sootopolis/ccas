@@ -4,11 +4,12 @@ import java.time.{Duration, Instant}
 
 import zio.{Chunk, Clock, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.{ClubQuery, ClubResolution, OutputFile}
+import ccas.analysis.apps.{ClubQuery, ClubResolution, OutputFile, ReportRoot}
 import ccas.analysis.apps.stats.StatsUtils.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.{ProgressDisplay, TimeParser}
+import ccas.utils.config.Settings
 import ccas.utils.errors.{BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 
@@ -83,7 +84,11 @@ object StatsApp extends ZIOAppDefault {
             } yield ()
           case _ => ZIO.fail(BadRequestException("Both --since and --until are required for period stats"))
         }
-      } yield ()).provideSomeAuto(PostgresClient.live(onInit = Tables.ensureTablesOnInit))
+      } yield ()).provideSomeAuto(
+        PostgresClient.live(onInit = Tables.ensureTablesOnInit),
+        Settings.live,
+        ReportRoot.live
+      )
     }
 
   /** Resolves a slug the way job submission does, so a club addressed by a former name still resolves. */

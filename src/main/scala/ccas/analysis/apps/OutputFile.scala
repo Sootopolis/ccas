@@ -8,11 +8,25 @@ import scala.annotation.tailrec
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
 
-import zio.{Clock, Task, UIO, ZIO}
+import zio.{Clock, RIO, RLayer, UIO, ZIO, ZLayer}
 
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.AppDir
+import ccas.utils.config.Settings
 import ccas.utils.errors.safeMessageNaming
+
+/** Where this process writes reports: [[OutputFile.Root]], resolved once. One that can't be resolved fails the write
+  * that needs it, not the process, since a server writes a report only when it stops a History job midway.
+  */
+final case class ReportRoot(resolved: Either[String, Path])
+
+object ReportRoot {
+
+  def at(path: Path): ReportRoot = ReportRoot(Right(path))
+
+  val live: RLayer[Settings, ReportRoot] =
+    ZLayer(ZIO.serviceWithZIO[Settings](OutputFile.Root.resolvedIn).map(ReportRoot(_)))
+}
 
 /** Where an app writes a report. Each write first moves the app's earlier output in that directory into `archive/`.
   * Club-scoped output (`write`, `writeAndLog`) goes to `<Root>/{clubSlug}/{timestamp}-{appName}.{ext}`, so one club's
@@ -32,19 +46,19 @@ object OutputFile {
 
   private val dateTimeFormat = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
 
-  def write(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): Task[Path] =
+  def write(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): RIO[ReportRoot, Path] =
     writeInternal(ClubSlug.unwrap(clubSlug), appName, content, ext)
 
-  def writeAndLog(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): Task[Unit] =
+  def writeAndLog(appName: String, clubSlug: ClubSlug, content: String, ext: String = "txt"): RIO[ReportRoot, Unit] =
     write(appName, clubSlug, content, ext).flatMap(path => ZIO.logInfo(s"Output written to $path"))
 
-  def writeGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): Task[Path] =
+  def writeGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): RIO[ReportRoot, Path] =
     writeInternal(subDir, appName, content, ext)
 
   // No warning for a relative root, unlike the job-log directory: the `writeAndLog` variants log each absolute path.
-  private def writeInternal(subDir: String, appName: String, content: String, ext: String): Task[Path] =
+  private def writeInternal(subDir: String, appName: String, content: String, ext: String): RIO[ReportRoot, Path] =
     for {
-      root  <- Root.fromConfig
+      root  <- ZIO.serviceWithZIO[ReportRoot](r => ZIO.fromEither(r.resolved).mapError(new IllegalArgumentException(_)))
       stamp <- Clock.localDateTime.map(_.format(dateTimeFormat))
       dir    = root.toAbsolutePath.resolve(subDir)
       suffix = s"-$appName.$ext"
@@ -53,7 +67,7 @@ object OutputFile {
       path <- ZIO.attemptBlocking(claimFreeName(dir, stamp, suffix)(Files.writeString(_, content, CREATE_NEW)))
     } yield path
 
-  def writeAndLogGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): Task[Unit] =
+  def writeAndLogGlobal(appName: String, content: String, subDir: String, ext: String = "txt"): RIO[ReportRoot, Unit] =
     writeGlobal(appName, content, subDir, ext).flatMap(path => ZIO.logInfo(s"Output written to $path"))
 
   // A report that can't be archived is left in place with a warning: the write that follows takes a free name.

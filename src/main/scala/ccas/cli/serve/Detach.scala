@@ -8,10 +8,12 @@ import java.time.{Duration => JDuration}
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
-import zio.{durationInt, Console, Duration, ExitCode, Task, UIO, ZIO}
+import zio.{durationInt, Console, Duration, ExitCode, Task, UIO, ZEnvironment, ZIO}
 
 import ccas.cli.serve.HealthProbe.Readiness
 import ccas.server.{BootGuard, CcasServer}
+import ccas.server.config.ServerConfig
+import ccas.utils.config.Settings
 import ccas.utils.errors.safeMessage
 
 /** Parent side of `ccas server up --detach`: spawn the server as a background process, wait for it to become ready,
@@ -79,14 +81,20 @@ object Detach {
     if (seconds > 0) { Right(seconds.seconds) }
     else { Left(s"$source must be a positive number of seconds (got $seconds)") }
 
-  def run(logDir: Path, stateDir: Path, port: Int, readyDeadline: Duration): UIO[ExitCode] = {
-    val pidPath = PidFile.path(stateDir, port)
-    val program = startUnlessRefused(
-      refusal = startRefusal(pidPath, port, HealthProbe.isUp(port), CcasServer.configuredListenProblem(port)),
-      // Asked here, in the parent: the child may still hold the terminal (macOS has no `setsid`), so it skips.
-      confirmed = BootGuard.confirmed(detachedChild = false),
-      start = start(logDir, port, pidPath, readyDeadline)
-    )
+  /** Starts a detached server on `port`, after the checks its child would make, on the `settings` the child will load:
+    * whether the host is listenable and, in the parent, whether to boot against the database.
+    */
+  def run(logDir: Path, stateDir: Path, port: Int, settings: Settings, readyDeadline: Duration): UIO[ExitCode] = {
+    val pidPath      = PidFile.path(stateDir, port)
+    val withSettings = ZEnvironment(settings)
+    val program = ServerConfig.load.provideEnvironment(withSettings).flatMap { server =>
+      startUnlessRefused(
+        refusal = startRefusal(pidPath, port, HealthProbe.isUp(port), CcasServer.listenProblem(server.host, port)),
+        // Asked here, in the parent: the child may still hold the terminal (macOS has no `setsid`), so it skips.
+        confirmed = BootGuard.confirmedFor(detachedChild = false).provideEnvironment(withSettings),
+        start = start(logDir, port, pidPath, readyDeadline)
+      )
+    }
 
     program.catchAllCause { c =>
       Console.printLineError(s"error: ${c.squash.safeMessage}").orDie.as(ExitCode(1))

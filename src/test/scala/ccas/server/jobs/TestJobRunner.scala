@@ -13,12 +13,14 @@ import com.typesafe.config.ConfigFactory
 import zio.{durationInt, Duration, Executor, Promise, Ref, UIO, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.apps.TestReports
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.analysis.tables.subtypes.JobRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.ServerTables
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.TestChessComClientSupport
+import ccas.utils.config.Settings
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.{FreshSchemaLayer, TestDbCleanup}
 import ccas.utils.sql.PostgresClient
@@ -61,6 +63,13 @@ object TestJobRunner extends ZIOSpecDefault {
     FreshSchemaLayer(schema = "test_job_runner", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
     JobRunner.live,
+    // The runner's log directory is one this suite chooses, so its files are found without reading the test config.
+    ZLayer.succeed(
+      Settings.from(
+        ConfigFactory.parseString(s"job-logs.directory = \"$logDir\"").withFallback(ConfigFactory.load())
+      )
+    ),
+    TestReports.root,
     // #132 regression seam: provide ProgressDisplay as a plain *service* with NO ambient ZLogger. `ProgressDisplay.live`
     // would install `asZLogger` into `currentLoggers` for the whole suite fiber tree, so every `submit` would inherit it
     // and fill the per-job file even on the unfixed code — masking the bug. `make` installs no logger, so each `submit`
@@ -71,6 +80,8 @@ object TestJobRunner extends ZIOSpecDefault {
     // default logger, not `asZLogger` — assert per-job-log behaviour only through `submit`.
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
+
+  private val logDir = Paths.get("target", "test-job-runner-logs")
 
   private object Times {
     val t0: Instant = Instant.parse("2025-06-01T00:00:00Z")
@@ -401,7 +412,6 @@ object TestJobRunner extends ZIOSpecDefault {
     }
 
   private def testSubmitWritesJobLog = test("submit routes job log lines into the per-job file") {
-    val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
     for {
       _      <- deleteAllJobRuns
       runner <- ZIO.service[JobRunner]
@@ -421,8 +431,7 @@ object TestJobRunner extends ZIOSpecDefault {
     */
   private def testSweepLogsRemovesAgedLogsAndSparesLiveJobs =
     test("sweepLogs honours the stored window, deletes aged job logs, and never a running job's") {
-      val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
-      val aged   = logDir.resolve("aged-by-test.log")
+      val aged = logDir.resolve("aged-by-test.log")
       (for {
         _ <- deleteAllJobRuns
         // A window shorter than the compiled default, so a two-day-old log is swept only if this pass re-read the row.
@@ -457,7 +466,6 @@ object TestJobRunner extends ZIOSpecDefault {
     */
   private def testSweepLogsIgnoresANonPositiveRetentionWindow =
     test("sweepLogs falls back to the default window rather than sweeping everything on a non-positive setting") {
-      val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
       val recent = logDir.resolve("recent-by-test.log")
       (for {
         _      <- AppSetting.set(AppSetting.JobLogRetentionDays, -1)
@@ -511,7 +519,6 @@ object TestJobRunner extends ZIOSpecDefault {
     */
   private def testLogStreamReportsASweptLogAsExpired =
     test("logStream reports a job whose log file is gone as Expired, not an empty stream") {
-      val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
       for {
         _      <- deleteAllJobRuns
         runner <- ZIO.service[JobRunner]
@@ -528,7 +535,6 @@ object TestJobRunner extends ZIOSpecDefault {
     */
   private def testLogStreamKeepsStreamingARunningJobWithNoFile =
     test("logStream streams a running job even when its log file is absent") {
-      val logDir = Paths.get(ConfigFactory.load().getString("job-logs.directory"))
       for {
         _       <- deleteAllJobRuns
         runner  <- ZIO.service[JobRunner]

@@ -10,9 +10,10 @@ import java.util.logging.Logger as JLogger
 import javax.sql.DataSource
 
 import com.augustnagro.magnum.{DbCon, DbTx}
-import com.typesafe.config.{Config, ConfigFactory}
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
 import zio.*
+
+import ccas.utils.config.Settings
 
 /** Database client for PostgreSQL with connection management and transient-error retry.
   *
@@ -24,14 +25,16 @@ import zio.*
   *   - '''Transaction support''' — `withTransaction` runs a multi-statement ZIO effect in a single JDBC transaction,
   *     retrying the entire transaction (not individual statements) on transient failure.
   *
-  * Constructed via the `PostgresClient.live` ZLayer which reads configuration from `application.conf` under a
-  * configurable prefix (default `"database"`).
+  * Built by [[PostgresClient.live]] from the `database` section of [[Settings]], or by [[PostgresClient.make]] from a
+  * [[DatabaseConfig]] a caller holds.
   *
   * @param addressOption where the pool connects, for naming it to an operator; see [[PostgresClient.databaseAddress]]
+  * @param maxPoolSizeOption the most connections the pool opens, absent for a `DataSource` this didn't build
   */
 final class PostgresClient private (
   private[sql] val dataSource: DataSource,
   val addressOption: Option[DatabaseAddress],
+  val maxPoolSizeOption: Option[Int],
   private val retryBaseDelay: Duration,
   private val retryMaxRetries: Int
 ) {
@@ -80,6 +83,7 @@ final class PostgresClient private (
         txClient = new PostgresClient(
           dataSource = SingleConnectionDataSource(proxy),
           addressOption = addressOption,
+          maxPoolSizeOption = maxPoolSizeOption,
           retryBaseDelay = retryBaseDelay,
           retryMaxRetries = 0
         )
@@ -132,17 +136,12 @@ object PostgresClient {
     ZIO.serviceWithZIO[PostgresClient](_.withTransaction(f))
 
   /** Resolve the JDBC schema to set on the pool. An explicit, non-blank `live(schema = ...)` arg wins; otherwise fall
-    * back to `dataSource.currentSchema` '''only if present'''. Any blank value — from either source (e.g. `.env` ships
-    * `DB_SCHEMA=`, and HOCON's `${?DB_SCHEMA}` treats set-but-empty as present) — is intentionally treated as "no
-    * schema", so the pool uses Postgres' default `search_path` — matching the `database.url` branch, which never sets a
-    * schema. Reading the key with `hasPath` rather than a bare `getString` avoids a `ConfigException$Missing` crash
-    * when `DB_SCHEMA` is unset.
+    * back to `dataSource.currentSchema`. Any blank value — from either source (e.g. `.env` ships `DB_SCHEMA=`, and
+    * HOCON's `${?DB_SCHEMA}` treats set-but-empty as present) — is intentionally treated as "no schema", so the pool
+    * uses Postgres' default `search_path` — matching the `database.url` branch, which never sets a schema.
     */
-  private[sql] def resolveSchema(explicit: Option[String], dsConfig: Config): Option[String] =
-    explicit
-      .orElse(Option.when(dsConfig.hasPath("currentSchema"))(dsConfig.getString("currentSchema")))
-      .map(_.trim)
-      .filter(_.nonEmpty)
+  private[sql] def resolveSchema(explicit: Option[String], configured: Option[String]): Option[String] =
+    explicit.orElse(configured).map(_.trim).filter(_.nonEmpty)
 
   /** A JDBC URL with any embedded credentials lifted out of it, ready to hand to Hikari. */
   private[ccas] final case class ResolvedJdbcUrl(jdbcUrl: String, user: Option[String], password: Option[String])
@@ -300,21 +299,31 @@ object PostgresClient {
   private def decodeQuery(s: String): String =
     URLDecoder.decode(s, StandardCharsets.UTF_8)
 
-  /** The JDBC URL and credentials a pool configured under `config` connects with: `url` when set, else the
-    * `dataSource` keys. Throws `ConfigException` on a missing `dataSource` key, as [[live]] always has.
+  /** The JDBC URL and credentials a pool configured by `config` connects with: `url` when set, else the `dataSource`
+    * keys, all but `currentSchema` of which it then needs. Only then is `DB_PORT` read as a number, so a URL connects
+    * whatever it holds.
     */
-  private[ccas] def resolveConnection(config: Config): Either[String, ResolvedJdbcUrl] =
-    if (config.hasPath("url")) { normalizeJdbcUrl(config.getString("url")) }
-    else {
-      val dsConfig = config.getConfig("dataSource")
-      val server   = s"${dsConfig.getString("serverName")}:${dsConfig.getInt("portNumber")}"
-      Right(
-        ResolvedJdbcUrl(
-          jdbcUrl = s"jdbc:postgresql://$server/${dsConfig.getString("databaseName")}",
-          user = Some(dsConfig.getString("user")),
-          password = Some(dsConfig.getString("password"))
-        )
-      )
+  private[ccas] def resolveConnection(config: DatabaseConfig): Either[String, ResolvedJdbcUrl] =
+    config.url match {
+      case Some(url) => normalizeJdbcUrl(url)
+      case None =>
+        val source = config.dataSource
+        for {
+          server   <- required(source.serverName, "serverName", "DB_HOST")
+          port     <- portNumber(source)
+          database <- required(source.databaseName, "databaseName", "DB_NAME")
+          user     <- required(source.user, "user", "DB_USER")
+          password <- required(source.password, "password", "DB_PASSWORD")
+        } yield ResolvedJdbcUrl(s"jdbc:postgresql://$server:$port/$database", Some(user), Some(password))
+    }
+
+  private def required[A](value: Option[A], key: String, variable: String): Either[String, A] =
+    value.toRight(s"database.dataSource.$key ($variable) is not set, and neither is database.url (DATABASE_URL)")
+
+  // A blank DB_PORT counts as unset, as a blank DB_SCHEMA does.
+  private def portNumber(source: DatabaseConfig.Source): Either[String, Int] =
+    required(source.portNumber.map(_.trim).filter(_.nonEmpty), "portNumber", "DB_PORT").flatMap { port =>
+      port.toIntOption.toRight(s"database.dataSource.portNumber (DB_PORT) is not a number: $port")
     }
 
   // One host, or a bracketed IPv6 literal, with an optional numeric port. Anything else in that position is a URL this
@@ -337,106 +346,88 @@ object PostgresClient {
     }
   }
 
-  private val DefaultPrefix = "database"
-
-  /** The address [[live]] connects to under the default config, resolved without building a pool: for asking before
-    * a boot whether it is the right database. Fails where `live` would before connecting, in both of the ways
-    * [[resolveConnection]] can: a `database.url` that doesn't parse is its `Left`, and config Typesafe Config can't
-    * read throws, such as the `dataSource` keys that are missing when neither `DATABASE_URL` nor `DB_*` is set.
+  /** The address a pool configured by `config` connects to, resolved without building one: for asking before a boot
+    * whether it is the right database. A `Left` where [[make]] would fail before connecting: a `database.url` that
+    * doesn't parse, or `dataSource` keys missing when neither `DATABASE_URL` nor `DB_*` is set.
     */
-  def configuredAddress: Task[Option[DatabaseAddress]] =
-    for {
-      resolution <- ZIO.attempt(resolveConnection(ConfigFactory.load().getConfig(DefaultPrefix)))
-      resolved   <- ZIO.fromEither(resolution).mapError(new IllegalArgumentException(_))
-    } yield databaseAddress(resolved.jdbcUrl)
+  def configuredAddress(config: DatabaseConfig): Either[String, Option[DatabaseAddress]] =
+    resolveConnection(config).map(resolved => databaseAddress(resolved.jdbcUrl))
 
+  /** The pool [[Settings]]' `database` section describes: [[make]], with `onInit` given the settings too. */
   def live(
-    prefix: String = DefaultPrefix,
     schema: Option[String] = None,
-    onInit: RIO[PostgresClient, Unit] = ZIO.unit
-  ): TaskLayer[PostgresClient] =
+    onInit: RIO[PostgresClient & Settings, Unit] = ZIO.unit
+  ): RLayer[Settings, PostgresClient] =
     ZLayer.scoped {
       for {
-        settings <- ZIO.attemptBlocking {
-          val config       = ConfigFactory.load().getConfig(prefix)
-          val hikariConfig = new HikariConfig()
-
-          // Accepts both the JDBC and libpq URL forms, and carries any embedded credentials separately so they never
-          // reach Hikari's `jdbcUrl` (which it echoes into driver-level failure messages). See `normalizeJdbcUrl`.
-          val resolved = resolveConnection(config).fold(msg => throw new IllegalArgumentException(msg), identity)
-          hikariConfig.setJdbcUrl(resolved.jdbcUrl)
-          resolved.user.foreach(hikariConfig.setUsername)
-          resolved.password.foreach(hikariConfig.setPassword)
-          if (!config.hasPath("url")) {
-            resolveSchema(schema, config.getConfig("dataSource")).foreach(hikariConfig.setSchema)
-          }
-
-          if (config.hasPath("pool")) {
-            val poolConfig = config.getConfig("pool")
-            if (poolConfig.hasPath("maximumPoolSize"))
-              hikariConfig.setMaximumPoolSize(poolConfig.getInt("maximumPoolSize"))
-            if (poolConfig.hasPath("minimumIdle")) hikariConfig.setMinimumIdle(poolConfig.getInt("minimumIdle"))
-            if (poolConfig.hasPath("connectionTimeout"))
-              hikariConfig.setConnectionTimeout(poolConfig.getLong("connectionTimeout"))
-            if (poolConfig.hasPath("idleTimeout")) hikariConfig.setIdleTimeout(poolConfig.getLong("idleTimeout"))
-            if (poolConfig.hasPath("maxLifetime")) hikariConfig.setMaxLifetime(poolConfig.getLong("maxLifetime"))
-            if (poolConfig.hasPath("keepaliveTime"))
-              hikariConfig.setKeepaliveTime(poolConfig.getLong("keepaliveTime"))
-            if (poolConfig.hasPath("connectionTestQuery"))
-              hikariConfig.setConnectionTestQuery(poolConfig.getString("connectionTestQuery"))
-            if (poolConfig.hasPath("initializationFailTimeout"))
-              hikariConfig.setInitializationFailTimeout(poolConfig.getLong("initializationFailTimeout"))
-            // Driver-level (pgjdbc) socket hardening. No Hikari setter covers these: `connectionTimeout` above bounds
-            // pool *checkout*, never the in-query `socket.read()`. Without `socketTimeout`, a connection silently
-            // dropped mid-query (Neon autosuspend, network blip, LB reset with no RST) parks the JDBC thread in
-            // `socket.read()` forever and the transient-retry below never fires (no exception is ever thrown). Setting
-            // them here applies to every connection regardless of host or whether the `url` / `dataSource` config
-            // branch was taken — both build a jdbcUrl, so Hikari's DriverDataSource forwards these to pgjdbc.
-            // `socketTimeout` / `connectTimeout` are in SECONDS for pgjdbc.
-            if (poolConfig.hasPath("socketTimeoutSeconds"))
-              hikariConfig.addDataSourceProperty("socketTimeout", poolConfig.getInt("socketTimeoutSeconds").toString)
-            if (poolConfig.hasPath("connectTimeoutSeconds"))
-              hikariConfig.addDataSourceProperty("connectTimeout", poolConfig.getInt("connectTimeoutSeconds").toString)
-            if (poolConfig.hasPath("tcpKeepAlive"))
-              hikariConfig.addDataSourceProperty("tcpKeepAlive", poolConfig.getBoolean("tcpKeepAlive").toString)
-          }
-
-          val baseDelay  = if (config.hasPath("retry.baseDelayMs")) config.getLong("retry.baseDelayMs") else 100L
-          val maxRetries = if (config.hasPath("retry.maxRetries")) config.getInt("retry.maxRetries") else 3
-
-          LiveSettings(hikariConfig, databaseAddress(resolved.jdbcUrl), baseDelay.millis, maxRetries)
-        }
-        hikariDs <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(new HikariDataSource(settings.hikariConfig)))
-        client = new PostgresClient(
-          dataSource = hikariDs,
-          addressOption = settings.addressOption,
-          retryBaseDelay = settings.retryBaseDelay,
-          retryMaxRetries = settings.retryMaxRetries
-        )
-        _ <- onInit.provideEnvironment(ZEnvironment(client))
+        settings <- ZIO.service[Settings]
+        config   <- DatabaseConfig.load
+        client   <- make(config, schema, onInit.provideSomeEnvironment[PostgresClient](_.add(settings)))
       } yield client
     }
 
-  /** What [[live]] reads from config before it opens the pool. */
-  private case class LiveSettings(
-    hikariConfig: HikariConfig,
-    addressOption: Option[DatabaseAddress],
-    retryBaseDelay: Duration,
-    retryMaxRetries: Int
-  )
+  /** The pool `config` describes, closed with the scope, after `onInit` has run with it. `schema`, when non-blank,
+    * replaces `dataSource.currentSchema` ([[resolveSchema]]).
+    */
+  def make(
+    config: DatabaseConfig,
+    schema: Option[String],
+    onInit: RIO[PostgresClient, Unit]
+  ): RIO[Scope, PostgresClient] =
+    for {
+      resolved <- ZIO.fromEither(resolveConnection(config)).mapError(new IllegalArgumentException(_))
+      hikariDs <- ZIO.fromAutoCloseable(
+        ZIO.attemptBlocking(new HikariDataSource(hikariConfig(config, resolved, schema)))
+      )
+      client = new PostgresClient(
+        dataSource = hikariDs,
+        addressOption = databaseAddress(resolved.jdbcUrl),
+        maxPoolSizeOption = Some(config.pool.maximumPoolSize),
+        retryBaseDelay = config.retry.baseDelayMs.millis,
+        retryMaxRetries = config.retry.maxRetries
+      )
+      _ <- onInit.provideEnvironment(ZEnvironment(client))
+    } yield client
 
-  /** Build a PostgresClient from a pre-existing DataSource. Unlike `live`, this does not manage the DataSource
-    * lifecycle (no close on scope exit) and does not read configuration. Useful for testing with custom DataSource
-    * wrappers or for bringing your own connection pool.
+  private def hikariConfig(config: DatabaseConfig, resolved: ResolvedJdbcUrl, schema: Option[String]): HikariConfig = {
+    val hikari = new HikariConfig()
+    // Accepts both the JDBC and libpq URL forms, and carries any embedded credentials separately so they never reach
+    // Hikari's `jdbcUrl` (which it echoes into driver-level failure messages). See `normalizeJdbcUrl`.
+    hikari.setJdbcUrl(resolved.jdbcUrl)
+    resolved.user.foreach(hikari.setUsername)
+    resolved.password.foreach(hikari.setPassword)
+    if (config.url.isEmpty) { resolveSchema(schema, config.dataSource.currentSchema).foreach(hikari.setSchema) }
+    val pool = config.pool
+    hikari.setMaximumPoolSize(pool.maximumPoolSize)
+    hikari.setMinimumIdle(pool.minimumIdle)
+    hikari.setConnectionTimeout(pool.connectionTimeout)
+    hikari.setIdleTimeout(pool.idleTimeout)
+    hikari.setMaxLifetime(pool.maxLifetime)
+    hikari.setKeepaliveTime(pool.keepaliveTime)
+    hikari.setConnectionTestQuery(pool.connectionTestQuery)
+    hikari.setInitializationFailTimeout(pool.initializationFailTimeout)
+    // pgjdbc's own settings, in SECONDS, for every connection in either branch: `connectionTimeout` bounds checkout only,
+    // so without `socketTimeout` a connection dropped mid-query (Neon autosuspend, an LB reset with no RST) parks its
+    // thread in `socket.read()` forever, and the transient-error retry never fires.
+    hikari.addDataSourceProperty("socketTimeout", pool.socketTimeoutSeconds.toString)
+    hikari.addDataSourceProperty("connectTimeout", pool.connectTimeoutSeconds.toString)
+    hikari.addDataSourceProperty("tcpKeepAlive", pool.tcpKeepAlive.toString)
+    hikari
+  }
+
+  /** Build a PostgresClient from a pre-existing DataSource. Unlike [[make]], this does not manage the DataSource
+    * lifecycle (no close on scope exit) and knows neither its address nor its size. Useful for testing with custom
+    * DataSource wrappers or for bringing your own connection pool.
     */
   def fromDataSource(
     dataSource: javax.sql.DataSource,
-    retryBaseDelay: Duration = 100.millis,
-    retryMaxRetries: Int = 3
+    retryBaseDelay: Duration,
+    retryMaxRetries: Int
   ): PostgresClient =
     new PostgresClient(
       dataSource = dataSource,
       addressOption = None,
+      maxPoolSizeOption = None,
       retryBaseDelay = retryBaseDelay,
       retryMaxRetries = retryMaxRetries
     )

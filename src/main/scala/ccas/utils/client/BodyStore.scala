@@ -2,18 +2,17 @@ package ccas.utils.client
 
 import java.net.URI
 
-import com.typesafe.config.ConfigFactory
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
-import zio.{Duration, Ref, RLayer, Scope, Task, UIO, URIO, ZIO, ZLayer}
+import zio.{Duration, Ref, RIO, RLayer, Scope, Task, UIO, URIO, ZIO, ZLayer}
 import zio.config.derivation.kebabCase
 import zio.config.magnolia.DeriveConfig
-import zio.config.typesafe.TypesafeConfigProvider
 
 import ccas.utils.AppDir
+import ccas.utils.config.Settings
 import ccas.utils.errors.safeMessage
 
 /** Content-addressed store for cached Chess.com response bodies, keyed by the hex SHA-256 already computed in
@@ -221,27 +220,24 @@ object BodyStore {
     given DeriveConfig[BodyStoreConfig] = DeriveConfig.derived
   }
 
-  /** Reads the `body-store` config section and builds the selected backend, wrapped in [[Deadlines]] and then
-    * [[HealthLogging]]. Scoped, because the S3 client is closable. Fails the layer with a clear message on an
-    * unknown backend, an unresolvable `fs` root, missing S3 credentials, or an incoherent timeout budget.
+  /** [[make]] from the `body-store` section of [[Settings]]. */
+  val live: RLayer[Settings, BodyStore] =
+    ZLayer.scoped(ZIO.serviceWithZIO[Settings](_.section[BodyStoreConfig]("body-store")).flatMap(make))
+
+  /** Builds the backend `config` selects, wrapped in [[Deadlines]] and then [[HealthLogging]]. Scoped, because the S3
+    * client is closable. Fails with a clear message on an unknown backend, an unresolvable `fs` root, missing S3
+    * credentials, or an incoherent timeout budget.
     *
     * Decorator order is load-bearing and invisible at the callsite: `Deadlines` must nest INSIDE `HealthLogging`,
     * or a store slow enough to blow every deadline never flips the degraded flag. `TestBodyStore` pins both orders
     * — see `docs/adr/0009-bound-every-body-store-operation.md`.
     */
-  val live: RLayer[Any, BodyStore] =
-    ZLayer.scoped {
-      val provider = TypesafeConfigProvider.fromTypesafeConfig(
-        ConfigFactory.load(),
-        enableCommaSeparatedValueAsList = true
-      )
-      for {
-        config   <- provider.load(summon[DeriveConfig[BodyStoreConfig]].desc.nested("body-store"))
-        limits   <- ZIO.fromEither(config.limits).mapError(new IllegalArgumentException(_))
-        store    <- build(config, limits)
-        degraded <- Ref.make(false)
-      } yield new HealthLogging(new Deadlines(store, limits), degraded)
-    }
+  private[ccas] def make(config: BodyStoreConfig): RIO[Scope, BodyStore] =
+    for {
+      limits   <- ZIO.fromEither(config.limits).mapError(new IllegalArgumentException(_))
+      store    <- build(config, limits)
+      degraded <- Ref.make(false)
+    } yield new HealthLogging(new Deadlines(store, limits), degraded)
 
   private def build(config: BodyStoreConfig, limits: BodyStoreLimits): ZIO[Scope, Throwable, BodyStore] =
     config.backend match {

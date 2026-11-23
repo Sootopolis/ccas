@@ -16,6 +16,7 @@ import zio.test.*
 import ccas.analysis.tables.Tables
 import ccas.utils.client.ChessComClient.ChessComClientConfig
 import ccas.utils.client.TestChessComClientSupport.*
+import ccas.utils.config.Settings
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -1628,8 +1629,9 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
   private def suiteConfig = suite("ChessComClientConfig")(
     test("ChessComClientConfig loads from test application.conf") {
       for {
-        cfg <- ChessComClient.loadConfig(ConfigFactory.load())
-        tc  <- ZIO.attempt(cfg.toThrottleConfig)
+        settings <- Settings.load
+        cfg      <- ChessComClient.loadConfig(settings)
+        tc       <- ZIO.attempt(cfg.toThrottleConfig)
       } yield assertTrue(
         cfg.contactEmail == "test@test.com",
         cfg.recoveryTiers == Vector(2, 4),
@@ -1655,7 +1657,7 @@ object TestChessComClientThrottling extends ZIOSpecDefault {
     test("ChessComClientConfig refuses a blank contact email") {
       val blank = ConfigFactory.load().withValue("chess-com-client.contact-email", ConfigValueFactory.fromAnyRef(" "))
       for {
-        exit <- ChessComClient.loadConfig(blank).exit
+        exit <- ChessComClient.loadConfig(Settings.from(blank)).exit
       } yield assertTrue(exit.causeOption.flatMap(_.failureOption).exists(_.getMessage.contains("CCAS_CONTACT_EMAIL")))
     },
     // A program that never calls Chess.com (`Tables`) must load config without CCAS_CONTACT_EMAIL. Resolves the shipped

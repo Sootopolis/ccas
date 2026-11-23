@@ -1,6 +1,6 @@
 # Cap API fan-out at the DB pool, not just the request gate
 
-**Status:** Accepted, 2026-06-23 (#91).
+**Status:** Accepted, 2026-06-23 (#91). Amended by #509 (where the pool's size comes from).
 
 ## Context
 
@@ -19,11 +19,11 @@ Take the smaller of the two ceilings: `min(2 * maxPermits, dbPool - PoolReserve)
 
 Subtract the reserve **only when `dbPool > 2 * PoolReserve`**. Applied blindly it wrecks a small pool: the size-3 test pool would become `3 - 2 = 1`, silently serialising fan-out that used to run three wide. The guard's invariant is that fan-out always keeps at least half the pool, so concurrency can never collapse and only genuinely roomy pools pay the margin.
 
-The arithmetic lives in `ApiConcurrency.cappedFor`, which is pure and takes the pool size as a parameter, so the rule is testable without `ConfigFactory`. `TestApiConcurrency` holds the worked cases — they are asserted there rather than tabulated in a comment, so they cannot drift.
+The arithmetic lives in `ApiConcurrency.cappedFor`, which is pure and takes the pool size as a parameter, so the rule is testable without a client. `TestApiConcurrency` holds the worked cases — they are asserted there rather than tabulated in a comment, so they cannot drift.
 
 ## Consequences
 
 - Prod (`maxPermits` 16, pool 20) caps at 18 rather than 32. This is the case #91 is about.
 - At `maxPermits` 8 against pool 20 the gate ceiling (16) still wins; the reserve does not bite.
 - The DB ceiling is slightly **non-monotonic** at the guard boundary — pool 4 gives 4, pool 5 gives 3, pool 6 gives 4. That one-step dip is the price of pinning the size-3 test pool to full width. It cannot bite a real deployment, where the pool is 20.
-- `dbMaxPoolSize` reads `ConfigFactory.load()` directly instead of asking a live `PostgresClient`, matching the shortcut `Tables` already uses for cache config rather than threading a client through every `fiberCap` call site for what is a static ceiling. Two consequences follow, both accepted: a `PostgresClient.live(prefix = …)` built under a non-default prefix is invisible here, and an absent config path yields `Int.MaxValue`. Both simply drop the DB ceiling, reverting to `2 * maxPermits`. Every current caller uses the default prefix, so the first is latent; threading the resolved prefix is the upgrade trigger if a second prefix is ever introduced.
+- `fiberCap(client)` takes the pool's size from the `PostgresClient` the `ChessComClient` writes through, which reports the `maximumPoolSize` it was built with, so no call site threads a second argument and the ceiling is always the pool the fan-out actually shares. A client over a `DataSource` the code didn't build (`PostgresClient.fromDataSource`, tests only) has no known size, and drops the DB ceiling, reverting to `2 * maxPermits`. Until #509 the size was read from config at first use, which missed a pool built from any other config.

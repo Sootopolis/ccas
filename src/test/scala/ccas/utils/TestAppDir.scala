@@ -6,10 +6,11 @@ import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.analysis.apps.OutputFile
 import ccas.server.jobs.JobRunner
+import ccas.utils.config.Settings
 
 /** `AppDir#resolve` with the two real directories as subjects and `XdgBase#ccasDir` with the bases only the CLI and body
   * store use, their inputs passed in so no environment rebinding is needed; the last test reads this process's config
-  * through `fromConfig`.
+  * through `in`.
   */
 object TestAppDir extends ZIOSpecDefault {
 
@@ -124,7 +125,8 @@ object TestAppDir extends ZIOSpecDefault {
         leaf = "probe"
       )
       for {
-        resolved <- unset.fromConfig
+        settings <- Settings.load
+        resolved <- unset.in(settings)
       } yield assertTrue(resolved.isAbsolute, resolved.endsWith(Paths.get("ccas", "probe")))
     }
   )

@@ -2,31 +2,18 @@ package ccas.analysis.apps.history
 
 import java.time.{Duration as JDuration, Instant}
 
-import zio.{
-  Chunk,
-  Clock,
-  ExitCode,
-  NonEmptyChunk,
-  Ref,
-  RIO,
-  Scope,
-  Task,
-  URIO,
-  ZEnvironment,
-  ZIO,
-  ZIOAppArgs,
-  ZIOAppDefault
-}
+import zio.{Chunk, Clock, ExitCode, NonEmptyChunk, Ref, RIO, Scope, URIO, ZEnvironment, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import HistoryUtils.*
 
-import ccas.analysis.apps.OutputFile
+import ccas.analysis.apps.{OutputFile, ReportRoot}
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
 import ccas.analysis.tables.subtypes.{HistoryRunId, JobRunId}
 import ccas.api.misc.subtypes.*
 import ccas.utils.{display, ProgressDisplay}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
+import ccas.utils.config.Settings
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
 
@@ -69,7 +56,9 @@ object HistoryApp extends ZIOAppDefault {
           ChessComClient.live("history"),
           HttpClientLayer.live,
           BodyStore.live,
-          PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+          PostgresClient.live(onInit = Tables.ensureTablesOnInit),
+          Settings.live,
+          ReportRoot.live
         )
     }
 
@@ -119,7 +108,7 @@ object HistoryApp extends ZIOAppDefault {
     full: Boolean,
     includeFinished: Boolean,
     refreshMinHours: Option[Int]
-  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient & ReportRoot, Unit] =
     if (slugs.size == 1) {
       discover(
         clubSlug = slugs.head,
@@ -154,7 +143,7 @@ object HistoryApp extends ZIOAppDefault {
 
   // Summary logging now happens inside discoverClub (shared by CLI + server + scheduler); the CLI additionally writes
   // the report file (OutputFile) here.
-  private def outputResult(r: HistoryResult): Task[Unit] =
+  private def outputResult(r: HistoryResult): RIO[ReportRoot, Unit] =
     OutputFile.writeAndLog("history", r.clubSlug, formatReport(r.stats, r.clubSlug, r.startedAt, r.completedAt))
 
   private def initialize(
@@ -214,7 +203,7 @@ object HistoryApp extends ZIOAppDefault {
     refreshMinHours: Option[Int] = None,
     trigger: RunTrigger = RunTrigger.Cli,
     jobRunIdOption: Option[JobRunId] = None
-  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, HistoryResult] =
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient & ReportRoot, HistoryResult] =
     discoverClub(
       clubSlug = clubSlug,
       expectedClubIdOption = expectedClubIdOption,
@@ -235,11 +224,12 @@ object HistoryApp extends ZIOAppDefault {
     trigger: RunTrigger,
     jobRunIdOption: Option[JobRunId],
     shared: Option[SharedContext]
-  ): RIO[ProgressDisplay & ChessComClient & PostgresClient, HistoryResult] = {
+  ): RIO[ProgressDisplay & ChessComClient & PostgresClient & ReportRoot, HistoryResult] = {
     require(shared.isEmpty || trigger == RunTrigger.Cli, "SharedContext requires sequential CLI execution")
     for {
-      pgClient <- ZIO.service[PostgresClient]
-      display  <- ZIO.service[ProgressDisplay]
+      pgClient   <- ZIO.service[PostgresClient]
+      display    <- ZIO.service[ProgressDisplay]
+      reportRoot <- ZIO.service[ReportRoot]
 
       // === Phase 1: Initialize ===
       InitResult(memberIds, memberNames, queriedIds, ctx, startedAt, runId) <-
@@ -375,7 +365,7 @@ object HistoryApp extends ZIOAppDefault {
             rf <- refreshedRef.get
             skip = memberIds.size - ms.queried - ms.failed
             _ <- finalizeInterrupted(ctx, runId, startedAt, ctx.clubSlug, ms, skip, sc, ss, rf)
-              .provideEnvironment(ZEnvironment(display, pgClient)).orDie
+              .provideEnvironment(ZEnvironment(display, pgClient, reportRoot)).orDie
           } yield ()
         }
       }
@@ -394,7 +384,7 @@ object HistoryApp extends ZIOAppDefault {
     seedClub: Int,
     seedStale: Int,
     refreshed: Int
-  ): RIO[ProgressDisplay & PostgresClient, Unit] =
+  ): RIO[ProgressDisplay & PostgresClient & ReportRoot, Unit] =
     for {
       partialStats     <- HistoryProcessing.readStats(ctx, waveCount = 0, waveDetails = Nil)
       pendingRemaining <- HistoryPendingMatch.count(ctx.clubId)

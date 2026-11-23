@@ -4,12 +4,14 @@ import zio.{RIO, UIO, URIO, ZIO, ZLayer}
 import zio.stream.ZStream
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
+import ccas.analysis.apps.TestReports
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.analysis.tables.subtypes.JobRunId
 import ccas.api.misc.subtypes.ClubId
-import ccas.server.jobs.{JobKind, JobLogs, JobRun, JobRunner}
+import ccas.server.jobs.{JobEffect, JobKind, JobLogs, JobRun, JobRunner}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}
+import ccas.utils.config.Settings
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
 /** Covers the composition in `CcasServer.retentionPass` rather than either sweep on its own: that both halves run in
@@ -83,7 +85,9 @@ object TestRetentionPass extends ZIOSpecDefault {
     ZLayer.makeSome[PostgresClient & BodyStore, JobRunner](
       TestChessComClientSupport.dummyLayer,
       ZLayer.succeed(ProgressDisplay.make(enabled = false)),
-      JobRunner.live
+      JobRunner.live,
+      Settings.live,
+      TestReports.root
     )
 
   private object DyingJobRunner extends JobRunner {
@@ -96,7 +100,7 @@ object TestRetentionPass extends ZIOSpecDefault {
       clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+      effect: JobEffect
     ): RIO[PostgresClient, JobRunId] = unused
 
     override def status(id: JobRunId): RIO[PostgresClient, Option[JobRun]] = unused

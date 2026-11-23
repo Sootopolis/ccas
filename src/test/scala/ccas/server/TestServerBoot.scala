@@ -8,22 +8,26 @@ import java.sql.{Connection, SQLException}
 import java.time.Instant
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
+import com.typesafe.config.ConfigFactory
 import org.postgresql.ds.PGSimpleDataSource
 import zio.*
 import zio.http.{Client, Server}
 import zio.stream.ZStream
 import zio.test.{assertTrue, Live, Spec, TestAspect, TestClock, ZIOSpecDefault, ZTestLogger}
 
+import ccas.analysis.apps.TestReports
 import ccas.analysis.tables.RunTrigger
 import ccas.analysis.tables.subtypes.JobRunId
 import ccas.api.misc.subtypes.ClubId
 import ccas.cli.CcasApiClient
+import ccas.server.config.ServerConfig
 import ccas.server.jobs.{JobEffect, JobKind, JobLogs, JobRun, JobRunner, JobRunStatus}
 import ccas.server.routes.JobRoutes.JobStatusResponse
 import ccas.server.scheduler.{JobSchedule, JobScheduler}
 import ccas.utils.{JobLogSink, ProgressDisplay}
 import ccas.utils.client.{ApiResponseCache, BodyStore, FsBodyStore, TestChessComClientSupport}
-import ccas.utils.sql.{DatabaseAddress, FreshSchemaLayer, PostgresClient}
+import ccas.utils.config.Settings
+import ccas.utils.sql.{DatabaseAddress, FreshSchemaLayer, PostgresClient, TestDatabases}
 
 /** What `CcasServer` does at boot: the pid file a detached server owns, what it says and asks about its database
   * (#320), what it refuses to do on a port it can't listen on (#446), the order it shuts down in and what it logs as
@@ -36,7 +40,7 @@ object TestServerBoot extends ZIOSpecDefault {
   private val local  = Some(DatabaseAddress("localhost:5432", "/ccas"))
   private val remote = Some(DatabaseAddress("ep-x.neon.tech", "/neondb"))
 
-  private val unreachablePool = PostgresClient.live(prefix = "databaseUnreachable", onInit = CcasServer.poolInit)
+  private val unreachablePool = TestDatabases.unreachablePool(onInit = CcasServer.poolInit)
 
   private val unreachableBoot = ZIO.scoped(BootLog.layer("the database pool")(unreachablePool).build).exit
 
@@ -339,9 +343,12 @@ object TestServerBoot extends ZIOSpecDefault {
       // past, as in `TestPostgresClientInterrupt`.
       test("a boot stuck on its first connection keeps saying it is still starting") {
         val entered = new CountDownLatch(1)
-        val client  = PostgresClient.fromDataSource(new StuckDataSource(entered))
+        val client  = TestDatabases.over(new StuckDataSource(entered))
         for {
-          fiber <- BootLog.bootEvery(10.millis)(_ => CcasServer.poolInit.provideEnvironment(ZEnvironment(client))).fork
+          settings <- Settings.load
+          fiber <- BootLog
+            .bootEvery(10.millis)(_ => CcasServer.poolInit.provideEnvironment(ZEnvironment(client, settings)))
+            .fork
           reached <- ZIO.attemptBlocking(entered.await(10, TimeUnit.SECONDS))
           _       <- ZIO.whenDiscard(!reached)(ZIO.dieMessage("getConnection was never reached"))
           notices <- loggedMessages.map(_.filter(_.startsWith("Still starting"))).delay(10.millis).repeatUntil(
@@ -478,12 +485,13 @@ object TestServerBoot extends ZIOSpecDefault {
         }
       },
       test(
-        "the check a detached start's parent runs reports a taken port on the host the server is configured to bind"
+        "the listen check reports a taken port on the host the server's settings name"
       ) {
         ZIO.scoped {
           for {
             port    <- takenPort
-            problem <- CcasServer.configuredListenProblem(port)
+            server  <- ServerConfig.load.provide(Settings.live)
+            problem <- CcasServer.listenProblem(server.host, port)
           } yield assertTrue(problem.exists(_.contains(s"Cannot listen on 127.0.0.1:$port")))
         }
       },
@@ -571,8 +579,18 @@ object TestServerBoot extends ZIOSpecDefault {
         assertTrue(BootGuard.question(resolved = Right(remote), detachedChild = true).isEmpty)
       },
       test("a config that doesn't resolve boots without asking, so the pool fails with its own message") {
-        val unresolved = Left(new IllegalArgumentException("database.url is blank"))
+        val unresolved = Left("database.url is blank")
         assertTrue(BootGuard.question(resolved = unresolved, detachedChild = false).isEmpty)
+      },
+      // The pool reads the same section from the same settings, so it fails at its own boot step, which names it.
+      test("a database section that doesn't load asks nothing and lets the boot go on, for the pool to report") {
+        val unloadable =
+          ConfigFactory.parseString("database.pool.maximumPoolSize = twenty").withFallback(ConfigFactory.load())
+        for {
+          confirmed <- BootGuard.confirmedFor(detachedChild = false).provideEnvironment(
+            ZEnvironment(Settings.from(unloadable))
+          )
+        } yield assertTrue(confirmed)
       }
     )
     // Sequential because two tests free a port and then use its number, which a sibling binding port 0 could be handed.
@@ -640,8 +658,8 @@ object TestServerBoot extends ZIOSpecDefault {
     underServerEnv(CcasServer.serveWith(pidFileOption, services, server))
 
   // Through the wrapper both entry points use, with a ccas.env path no file can exist at, so it applies nothing.
-  private def underServerEnv(boot: RIO[Scope & ProgressDisplay, Unit]): Task[Unit] =
-    CcasServer.withServerEnv(Right(Paths.get("/dev/null/ccas.env")))(ZIO.scoped[ProgressDisplay](boot))
+  private def underServerEnv(boot: RIO[Scope & ProgressDisplay & Settings, Unit]): Task[Unit] =
+    CcasServer.withServerEnv(Right(Paths.get("/dev/null/ccas.env")))(ZIO.scoped[ProgressDisplay & Settings](boot))
 
   // A loopback port held until the scope closes.
   private val takenPort: ZIO[Scope, Throwable, Int] =
@@ -655,8 +673,13 @@ object TestServerBoot extends ZIOSpecDefault {
     services: ZLayer[ProgressDisplay, Throwable, CcasServer.Served]
   ): Task[Unit] =
     JobLogSink.currentSink.locally(capturing(log)) {
-      val confirmed = BootGuard.confirmed(detachedChild = pidFileOption.isDefined)
-      underServerEnv(CcasServer.startOn("127.0.0.1", port, pidFileOption, confirmed, services))
+      underServerEnv(
+        ZIO.serviceWithZIO[Settings] { settings =>
+          val confirmed =
+            BootGuard.confirmedFor(detachedChild = pidFileOption.isDefined).provideEnvironment(ZEnvironment(settings))
+          CcasServer.startOn("127.0.0.1", port, pidFileOption, confirmed, services)
+        }
+      )
     }
 
   private val noServicesFailure = new IllegalStateException("this test builds no services")
@@ -671,6 +694,8 @@ object TestServerBoot extends ZIOSpecDefault {
       ZLayer.succeedEnvironment(env),
       TestChessComClientSupport.dummyLayer,
       JobRunner.live,
+      Settings.live,
+      TestReports.root,
       JobScheduler.live
     )
 
@@ -777,7 +802,7 @@ object TestServerBoot extends ZIOSpecDefault {
       ),
       // A data source that is never asked for a connection, so the pool's release is all the test sees of it.
       ZLayer.scoped(
-        ZIO.acquireRelease(ZIO.succeed(PostgresClient.fromDataSource(new PGSimpleDataSource()))) { _ =>
+        ZIO.acquireRelease(ZIO.succeed(TestDatabases.over(new PGSimpleDataSource()))) { _ =>
           pidFileAtPoolClose *> record("pool closed")
         }
       ),

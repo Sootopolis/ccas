@@ -4,6 +4,7 @@ import zio.*
 import zio.http.{Client, Server}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.apps.TestReports
 import ccas.analysis.tables.RunTrigger
 import ccas.analysis.tables.subtypes.JobRunId
 import ccas.cli.{CcasApiClient, CliError, JobFollower, TempWiring}
@@ -12,6 +13,7 @@ import ccas.server.jobs.{JobKind, JobRun, JobRunner, JobRunStatus}
 import ccas.server.routes.JobRoutes.CancelResult
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.TestChessComClientSupport
+import ccas.utils.config.Settings
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 
 /** End-to-end wire smoke for job cancellation: a REAL zio-http server bound to an ephemeral port serving the REAL
@@ -32,6 +34,8 @@ object TestJobCancelWire extends ZIOSpecDefault {
     FreshSchemaLayer(schema = "test_cancel_wire", onInit = ServerTables.ensureTables),
     TestChessComClientSupport.dummyLayer,
     JobRunner.live,
+    Settings.live,
+    TestReports.root,
     ZLayer.succeed(ProgressDisplay.make(enabled = false)),
     Server.defaultWith(_.port(0)),
     boundPort,

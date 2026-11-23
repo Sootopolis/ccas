@@ -3,8 +3,11 @@ package ccas.server.config
 import java.nio.file.{Files, Path}
 
 import com.typesafe.config.ConfigFactory
-import zio.{IO, UIO, ZIO}
+import zio.{Config, IO, UIO, ZIO}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
+
+import ccas.server.CcasServer
+import ccas.utils.config.Settings
 
 /** Tests [[ServerEnvOverlay]]: a file value is promoted to a JVM system property only when the env var and property are
   * both unset, and Typesafe Config then resolves both optional `${?VAR}` and required `${VAR}` substitutions to it. The
@@ -110,6 +113,22 @@ object TestServerEnvOverlay extends ZIOSpecDefault {
           applied <- ServerEnvOverlay(file)
           got     <- prop("CCAS_TEST_OVERLAY_E")
         } yield assertTrue(applied.isEmpty, got.isEmpty)
+      }
+    },
+    // A system property is a config path in its own right, so the settings read the key itself.
+    test(
+      "withServerEnv loads the settings it provides after applying the ccas.env file, so a value set only in the file " +
+        "reaches them"
+    ) {
+      withCleanProps("CCAS_TEST_OVERLAY_G") {
+        for {
+          dir <- tempDir
+          file = dir.resolve("ccas.env")
+          _ <- write(file, "CCAS_TEST_OVERLAY_G=from-the-file\n")
+          got <- CcasServer.withServerEnv(Right(file)) {
+            ZIO.serviceWithZIO[Settings](_.read("CCAS_TEST_OVERLAY_G", Config.string))
+          }
+        } yield assertTrue(got == "from-the-file")
       }
     },
     test("is idempotent: a second run applies nothing new") {

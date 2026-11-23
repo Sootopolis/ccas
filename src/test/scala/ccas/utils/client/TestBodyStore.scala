@@ -22,9 +22,9 @@ import software.amazon.awssdk.services.s3.model.{
   PutObjectResponse
 }
 import zio.*
-import zio.config.magnolia.DeriveConfig
-import zio.config.typesafe.TypesafeConfigProvider
 import zio.test.*
+
+import ccas.utils.config.Settings
 
 /** Unit coverage for [[FsBodyStore]] — the local-filesystem [[BodyStore]] that is the dev/test/CI double for the R2
   * backing store (#191) — plus [[S3BodyStore]]'s key layout against an in-memory client (#242), and the companion's
@@ -269,10 +269,9 @@ object TestBodyStore extends ZIOSpecDefault {
     test("an absent fs-root key decodes to None instead of failing the layer") {
       // `application.conf` now ships `fs-root = ${?CCAS_BODY_STORE_FS_ROOT}` with no literal, so with the env var
       // unset the key is absent from the resolved config entirely — i.e. every default install takes this path.
-      val hocon    = ConfigFactory.parseString("""body-store { backend = "fs" }""")
-      val provider = TypesafeConfigProvider.fromTypesafeConfig(hocon, enableCommaSeparatedValueAsList = true)
+      val settings = Settings.from(ConfigFactory.parseString("""body-store { backend = "fs" }"""))
       for {
-        config <- provider.load(summon[DeriveConfig[BodyStore.BodyStoreConfig]].desc.nested("body-store"))
+        config <- settings.section[BodyStore.BodyStoreConfig]("body-store")
       } yield assertTrue(config.backend == "fs", config.fsRoot.isEmpty)
     },
     test("blank values are treated as absent, never as the CWD") {
@@ -505,7 +504,9 @@ object TestBodyStore extends ZIOSpecDefault {
       // The test above pins what the two orders *do*; this pins which one `live` picks, which is otherwise
       // unobservable — the decorators are structural, and a stalling store cannot be injected under `live`.
       ZIO.scoped {
-        BodyStore.live.build.map(env => assertTrue(env.get[BodyStore].isInstanceOf[BodyStore.HealthLogging]))
+        (Settings.live >>> BodyStore.live).build.map { env =>
+          assertTrue(env.get[BodyStore].isInstanceOf[BodyStore.HealthLogging])
+        }
       }
     },
     test("an outer interruption still propagates through a bounded operation") {

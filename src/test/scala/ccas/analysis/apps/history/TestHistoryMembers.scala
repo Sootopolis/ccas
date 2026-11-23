@@ -7,6 +7,7 @@ import zio.{Chunk, Ref, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.apps.{ReportRoot, TestReports}
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiClubMembersJson}
 import ccas.analysis.tables.{Club, ClubMember, Player, Tables}
 import ccas.api.misc.enums.PlayerStatusCategory
@@ -55,12 +56,13 @@ object TestHistoryMembers extends ZIOSpecDefault {
         _      <- board
         _ <- HistoryApp
           .discover(clubSlug = slug, expectedClubIdOption = None)
-          .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+          .provideSomeLayer[ProgressDisplay & PostgresClient & ReportRoot](ZLayer.succeed(client))
         names   <- queried.get
         members <- ClubMember.selectClub(clubId)
       } yield assertTrue(names == Chunk(player.username.value), members.isEmpty)
     }
   ).provideShared(
+    TestReports.root,
     FreshSchemaLayer(schema = "test_history_members", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.withLiveClock

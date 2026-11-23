@@ -4,6 +4,7 @@ import zio.{Chunk, Ref, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.apps.{ReportRoot, TestReports}
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiClubMembersJson}
 import ccas.analysis.tables.Tables
 import ccas.api.misc.subtypes.ClubSlug
@@ -35,7 +36,7 @@ object TestHistoryAppRename extends ZIOSpecDefault {
         )
         client <- TestChessComClientSupport.fakeClient(routes)
         result <- HistoryApp.discover(clubSlug = ClubSlug("former-name"), expectedClubIdOption = None)
-          .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+          .provideSomeLayer[ProgressDisplay & PostgresClient & ReportRoot](ZLayer.succeed(client))
         paths <- requested.get
       } yield assertTrue(
         result.clubSlug == ClubSlug("current-name"),
@@ -44,6 +45,7 @@ object TestHistoryAppRename extends ZIOSpecDefault {
       )
     }
   ).provideShared(
+    TestReports.root,
     FreshSchemaLayer(schema = "test_history_app_rename", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.withLiveClock

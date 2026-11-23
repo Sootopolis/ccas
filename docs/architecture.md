@@ -8,7 +8,7 @@ What each moving part is and how the pieces connect. Reference, not rationale �
 - **`ccas.analysis`** — domain tables and business logic. `analysis.tables` holds the persisted entities (core, ref resolution, recruitment, history crawl, run tracking and `AppSetting`). `analysis.apps` holds the [applications](#applications-ccasanalysisapps) and shared helpers (`PlayerUpdater`, `UsernameRenameResolver`, `ClubSlugRenameResolver`, `OutputFile`).
 - **`ccas.server`** — the zio-http backend: `server.jobs` (`JobRunner`, `JobRun`, `JobSchedule`), `server.routes`, `server.scheduler` (`JobScheduler`). Entry point `CcasServer extends ZIOAppDefault`.
 - **`ccas.cli`** — the zio-cli binary, `ccas.cli.Main`. `CliCommand` defines the tree, `Dispatcher` turns each parsed command into HTTP calls against a running server, and `CompletionSpec` / `CompletionEmitter` generate shell completions. Exit codes: 0 success or help, 1 failure (a failed job, a server that is not running), 2 usage error.
-- **`ccas.utils`** — shared infrastructure: the Chess.com HTTP client with the tables it caches responses and records its requests in (`client/`), JSON traits (`json/`), the SQL client and helpers (`sql/`), opaque-type utilities (`opaque/`), pretty-printing.
+- **`ccas.utils`** — shared infrastructure: the Chess.com HTTP client with the tables it caches responses and records its requests in (`client/`), JSON traits (`json/`), the SQL client and helpers (`sql/`), opaque-type utilities (`opaque/`), pretty-printing, and `config.Settings`, the process's `application.conf`, loaded once, from which each service reads its own typed section.
 
 A package imports only from its own layer and those below it, as scalafix's `PackageLayers` checks against the layers `.scalafix.conf` lists ([0025](adr/0025-conventions-checked-by-scalafix.md)).
 
@@ -90,7 +90,7 @@ A polling daemon on a configurable interval that checks enabled `JobSchedule` en
 
 ## Database
 
-Magnum (`com.augustnagro.magnum`) over PostgreSQL. `PostgresClient` (`ccas.utils.sql`) runs Magnum statements on a HikariCP pool, adding connection-pool hardening (validation queries, lazy initialisation, socket timeouts) and transient-error retry. `PostgresClient.live` reads config under the `database` prefix; all app and server code depends on `PostgresClient`, never on Magnum's `Transactor`.
+Magnum (`com.augustnagro.magnum`) over PostgreSQL. `PostgresClient` (`ccas.utils.sql`) runs Magnum statements on a HikariCP pool, adding connection-pool hardening (validation queries, lazy initialisation, socket timeouts) and transient-error retry. `PostgresClient.live` reads its `DatabaseConfig` from the `database` section of `Settings`, and `PostgresClient.make` takes one directly; all app and server code depends on `PostgresClient`, never on Magnum's `Transactor`.
 
 Each table is a case class that `derives DbCodec`, with a companion holding its `createTable` and its queries, often built on a `SqlLiteral` column list. Tables backed by Magnum's `Repo` / `ImmutableRepo` are also annotated `@Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)`, which derives their table and column names from the case class; the rest name them in their SQL.
 

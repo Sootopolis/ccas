@@ -2,8 +2,9 @@ package ccas.utils
 
 import java.nio.file.{Path, Paths}
 
-import com.typesafe.config.ConfigFactory
-import zio.{Task, ZIO}
+import zio.{Config, IO, Task, ZIO}
+
+import ccas.utils.config.Settings
 
 /** A directory CCAS writes to: the operator's setting at `configKey` when there is one, else `<XDG base>/ccas/<leaf>`.
   * Resolved in code because a relative HOCON literal lands wherever the process was launched (#344). Unless set, every
@@ -33,16 +34,15 @@ final case class AppDir(configKey: String, overrideVar: String, base: AppDir.Xdg
   def fromEnvironment(configured: Option[String]): Either[String, Path] =
     resolve(configured = configured, xdgHome = base.xdgHomeHere, userHome = AppDir.userHomeHere)
 
-  /** [[resolve]] against this process's config and environment. Not absolutised, so a caller can tell a relative
-    * setting from the default.
+  /** [[resolve]] of the setting at `configKey` in `settings`, against this process's environment. Not absolutised, so a
+    * caller can tell a relative setting from the default.
     */
-  def fromConfig: Task[Path] =
-    ZIO
-      .attempt {
-        val config = ConfigFactory.load()
-        fromEnvironment(Option.when(config.hasPath(configKey))(config.getString(configKey)))
-      }
-      .flatMap(resolved => ZIO.fromEither(resolved).mapError(new IllegalArgumentException(_)))
+  def resolvedIn(settings: Settings): IO[Config.Error, Either[String, Path]] =
+    settings.read(configKey, Config.string.optional).map(fromEnvironment)
+
+  /** [[resolvedIn]], failing when the directory can't be resolved. */
+  def in(settings: Settings): Task[Path] =
+    resolvedIn(settings).flatMap(resolved => ZIO.fromEither(resolved).mapError(new IllegalArgumentException(_)))
 }
 
 object AppDir {

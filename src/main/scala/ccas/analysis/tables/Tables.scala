@@ -8,6 +8,7 @@ import zio.{duration2DurationOps, Clock, RIO, Scope, ZIO, ZIOAppDefault}
 
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ApiFetchFailure, ApiResponseBody, ApiResponseCache, BodyStore, ClientConfig, ClientStats}
+import ccas.utils.config.Settings
 import ccas.utils.sql.PostgresClient
 
 object Tables extends ZIOAppDefault {
@@ -15,7 +16,7 @@ object Tables extends ZIOAppDefault {
   override def run: RIO[Scope, Unit] =
     ProgressDisplay.installed(showProgress = false) {
       for {
-        _ <- ensureTables.provide(PostgresClient.live(), BodyStore.live)
+        _ <- ensureTables.provide(PostgresClient.live(), BodyStore.live, Settings.live)
         _ <- ZIO.logInfo("All tables ensured")
       } yield ()
     }
@@ -28,8 +29,8 @@ object Tables extends ZIOAppDefault {
     * long-lived instance later. Two lines for one outage is the accepted cost of not threading a shared store
     * through the pool's init hook.
     */
-  val ensureTablesOnInit: RIO[PostgresClient, Unit] =
-    ensureTables.provideSomeLayer[PostgresClient](BodyStore.live)
+  val ensureTablesOnInit: RIO[PostgresClient & Settings, Unit] =
+    ensureTables.provideSomeLayer[PostgresClient & Settings](BodyStore.live)
 
   def ensureTables: RIO[PostgresClient & BodyStore, Unit] =
     for {

@@ -3,13 +3,13 @@ package ccas.server
 import java.net.{InetAddress, ServerSocket}
 import java.nio.file.{Files, Path, Paths}
 
-import com.typesafe.config.{Config, ConfigFactory}
 import zio.*
 import zio.http.{Routes, Server}
 import zio.http.netty.NettyConfig
 
+import ccas.analysis.apps.ReportRoot
 import ccas.analysis.tables.Tables
-import ccas.server.config.{ServerEnvOverlay, ServerEnvPaths}
+import ccas.server.config.{ServerConfig, ServerEnvOverlay, ServerEnvPaths}
 import ccas.server.jobs.JobRunner
 import ccas.server.routes.{
   BlacklistRoutes,
@@ -23,6 +23,7 @@ import ccas.server.routes.{
 import ccas.server.scheduler.JobScheduler
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer}
+import ccas.utils.config.Settings
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 
@@ -38,38 +39,48 @@ object CcasServer extends ZIOAppDefault {
   // on its own, having logged the step it waits on (`ShutdownLog`). `ccas.cli.Main` uses the same limit.
   override def gracefulShutdownTimeout: Duration = 15.seconds
 
-  /** Runs `zio` under the server's display, with `file` applied by [[ServerEnvOverlay]] first. Every process that runs
-    * the server starts here, `ccas server up` included, so the file is applied once and a file that can't be read is
-    * logged in the format of every line after it (#363). So is having nowhere to look for it (`Left`): a `ccas-server`
-    * with no home directory boots from its environment alone. Nothing `zio` runs may install a display of its own: a
-    * second one would add a second logger, and every line would print twice.
+  /** Runs `zio` under the server's display, with `file` applied by [[ServerEnvOverlay]] and then the [[Settings]]
+    * loaded, so a value set only in the file reaches them. Every process that runs the server starts here, `ccas server
+    * up` included, so the file is applied once and a file that can't be read is logged in the format of every line
+    * after it (#363). So is having nowhere to look for it (`Left`): a `ccas-server` with no home directory boots from
+    * its environment alone. Nothing `zio` runs may install a display of its own: a second one would add a second
+    * logger, and every line would print twice.
     */
-  private[ccas] def withServerEnv[R, E, A](
+  private[ccas] def withServerEnv[R, E >: Throwable, A](
     file: Either[String, Path]
-  )(zio: ZIO[R & ProgressDisplay, E, A]): ZIO[R, E, A] =
+  )(zio: ZIO[R & ProgressDisplay & Settings, E, A]): ZIO[R, E, A] =
     ProgressDisplay.installed(showProgress = false) {
-      ZIO.fromEither(file).flatMap(ServerEnvOverlay(_).unit).catchAll(message => ZIO.logWarning(message)) *> zio
+      for {
+        _        <- ZIO.fromEither(file).flatMap(ServerEnvOverlay(_).unit).catchAll(message => ZIO.logWarning(message))
+        settings <- Settings.load
+        result   <- zio.provideSomeEnvironment[R & ProgressDisplay](_.add(settings))
+      } yield result
     }
 
-  /** Boots the server, once [[withServerEnv]] has applied the ccas.env file. */
-  private[ccas] def serve: ZIO[Scope & ProgressDisplay, Throwable, Unit] =
-    ZIO.suspendSucceed {
-      val config = ConfigFactory.load()
-      startOn(
-        host = hostIn(config),
-        port = config.getInt("server.port"),
+  /** Boots the server with the settings [[withServerEnv]] loaded. */
+  private[ccas] def serve: ZIO[Scope & ProgressDisplay & Settings, Throwable, Unit] =
+    for {
+      settings <- ZIO.service[Settings]
+      server   <- ServerConfig.load
+      _ <- startOn(
+        host = server.host,
+        port = server.port,
         pidFileOption = detachedPidFileOption,
-        confirmed = BootGuard.confirmed(detachedChild = detachedPidFileOption.isDefined),
+        confirmed = BootGuard
+          .confirmedFor(detachedChild = detachedPidFileOption.isDefined)
+          .provideEnvironment(ZEnvironment(settings)),
         services = ZLayer.makeSome[ProgressDisplay, Served](
+          ZLayer.succeed(settings),
           loggedLayer("the Chess.com client")(ChessComClient.live("server")),
           loggedLayer("the HTTP client")(HttpClientLayer.live),
           loggedLayer("the body store")(BodyStore.live),
           loggedLayer("the database pool")(PostgresClient.live(onInit = poolInit)),
+          ReportRoot.live,
           loggedLayer("the job runner")(JobRunner.live),
           JobScheduler.live
         )
       )
-    }
+    } yield ()
 
   private def loggedLayer[RIn, E, A](name: String)(layer: ZLayer[RIn, E, A]): ZLayer[RIn, E, A] =
     BootLog.layer(name)(ShutdownLog.layer(name)(layer))
@@ -90,14 +101,6 @@ object CcasServer extends ZIOAppDefault {
         onFalse = ZIO.fail(BootGuard.Refused)
       )
 
-  private def hostIn(config: Config): String = config.getString("server.host")
-
-  /** [[listenProblem]] on the host this server is configured to bind, for `--detach`'s parent to ask before its child
-    * does. Reads the same config the child will, so it must run after the ccas.env overlay.
-    */
-  private[ccas] def configuredListenProblem(port: Int): Task[Option[String]] =
-    ZIO.attemptBlocking(hostIn(ConfigFactory.load())).flatMap(listenProblem(_, port))
-
   private def refuseUnlessListenable(host: String, port: Int): IO[BootGuard.Refused.type, Unit] =
     listenProblem(host, port).flatMap { problemOption =>
       ZIO.foreachDiscard(problemOption) { problem =>
@@ -110,7 +113,7 @@ object CcasServer extends ZIOAppDefault {
     * boot, so a boot that loses the port while its layers build is left to that bind, ahead of the loops (`running`).
     * `reuseAddress`, the JDK's default here, is what lets a restart past connections in TIME_WAIT.
     */
-  private def listenProblem(host: String, port: Int): UIO[Option[String]] =
+  private[ccas] def listenProblem(host: String, port: Int): UIO[Option[String]] =
     ZIO.attemptBlocking(new ServerSocket(port, 1, InetAddress.getByName(host)).close()).fold(
       error =>
         Some(
@@ -187,7 +190,7 @@ object CcasServer extends ZIOAppDefault {
     * (`initializationFailTimeout = -1`), so naming it first means even a boot that then fails to connect says where it
     * tried (#320).
     */
-  private[server] val poolInit: RIO[PostgresClient, Unit] =
+  private[server] val poolInit: RIO[PostgresClient & Settings, Unit] =
     ZIO.serviceWithZIO[PostgresClient] { client =>
       ZIO.logInfo(s"Database: ${client.addressOption.fold("address not readable from the configuration")(_.render)}")
     } *> ServerTables.ensureTables

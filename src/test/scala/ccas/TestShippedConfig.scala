@@ -4,12 +4,23 @@ import java.io.File
 
 import scala.jdk.CollectionConverters.*
 
-import com.typesafe.config.{Config, ConfigFactory, ConfigParseOptions, ConfigResolveOptions, ConfigValueType}
-import zio.ZIO
-import zio.test.{assertTrue, Spec, ZIOSpecDefault}
+import com.typesafe.config.{
+  Config as TypesafeConfig,
+  ConfigFactory,
+  ConfigParseOptions,
+  ConfigResolveOptions,
+  ConfigValueType
+}
+import zio.{Config, ZIO}
+import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
+import ccas.server.config.{ServerConfig, ServerEnvKeys}
 import ccas.server.config.ServerEnvKey.Values.Toggle
-import ccas.server.config.ServerEnvKeys
+import ccas.server.scheduler.SchedulerConfig
+import ccas.utils.client.BodyStore.BodyStoreConfig
+import ccas.utils.client.ChessComClient.ChessComClientConfig
+import ccas.utils.config.Settings
+import ccas.utils.sql.DatabaseConfig
 
 // #205 took a relative default off body-store.fs-root and left job-logs.directory's in the same file, for #344 to find
 // in production. A path literal resolves against wherever the process starts, so path settings default in code.
@@ -26,10 +37,26 @@ object TestShippedConfig extends ZIOSpecDefault {
 
   private val NoEnvironment = ConfigResolveOptions.defaults().setUseSystemEnvironment(false)
 
-  private def isBoolean(config: Config, path: String): Boolean =
+  private def isBoolean(config: TypesafeConfig, path: String): Boolean =
     config.hasPath(path) && config.getValue(path).valueType == ConfigValueType.BOOLEAN
 
   override def spec: Spec[Any, Throwable] = suite("ShippedConfig")(
+    // The code holds no fallback for a key the shipped file sets (#509), so each section must decode from it alone.
+    test(
+      "every section decodes from the shipped application.conf with no environment, so no default is needed in code"
+    ) {
+      for {
+        resolved <- ZIO.attempt(ConfigFactory.parseFile(Shipped, MustExist).resolve(NoEnvironment))
+        settings = Settings.from(resolved)
+        _ <- settings.section[ChessComClientConfig]("chess-com-client")
+        _ <- settings.section[BodyStoreConfig]("body-store")
+        _ <- settings.section[DatabaseConfig]("database")
+        _ <- settings.section[SchedulerConfig]("scheduler")
+        _ <- settings.section[ServerConfig]("server")
+        _ <- settings.read("output.directory", Config.string.optional)
+        _ <- settings.read("job-logs.directory", Config.string.optional)
+      } yield assertCompletes
+    },
     test(
       "no path setting in the shipped application.conf has a literal default, so none resolves against the launch directory"
     ) {
