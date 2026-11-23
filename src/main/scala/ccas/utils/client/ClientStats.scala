@@ -6,7 +6,6 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 

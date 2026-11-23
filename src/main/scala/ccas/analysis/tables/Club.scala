@@ -10,7 +10,6 @@ import zio.ZIO
 
 import ccas.api.club.ApiClub
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 

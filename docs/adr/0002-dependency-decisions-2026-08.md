@@ -1,6 +1,6 @@
 # Dependency decisions — 2026-08-24
 
-**Status:** Accepted, 2026-08-25.
+**Status:** Accepted, 2026-08-25. Amended by #536 (Magnum 2.0.0).
 
 From the first full version review in a while. Records only the calls that needed weighing; the routine bumps are legible from `project/Versions.scala` and aren't repeated here.
 
@@ -32,7 +32,7 @@ Consequence to keep in mind: since SDK 2.41.11, if Apache5 is on the classpath a
 
 ## Held
 
-**Magnum 1.3.1.** Newest stable. Maven's `<release>` pointer and GitHub both mislabel `2.0.0-M3` as a release (M2 and M3 carry `prerelease=false`), so checkers will report it as latest — it is a milestone, and the 2.0 line has sat in milestone 19 months. Worth knowing what 2.0 would buy: it deletes both documented SQL gotchas — the null-`DbCodec` guard (fixed in M1) and the bare-enum-case empty-placeholder bug (fixed in M2). Migration is ~7 sites across 4 files, mostly one word each, plus a small `PostgresClient` change since `Transactor` is no longer a case class. The risky part is the new `readSingleOption`: a careless `Some(readSingle(...))` turns every NULL into `Some(null)` rather than failing loudly.
+**Magnum 1.3.1**, until 2.0.0 went stable on 2026-11-08; #536 moved to it. At this review the newest stable was 1.3.1: Maven's `<release>` pointer and GitHub both mislabelled `2.0.0-M3` as a release, and the 2.0 line had sat in milestone 19 months. 2.0 deleted both SQL pitfalls `CLAUDE.md` used to list: the null-`DbCodec` guard and the bare-enum-case empty placeholder, which is now a compile error at worst. The move cost three `derives DbCodec` (2.0 no longer derives a codec for any case class it meets), `PostgresClient` holding its `DataSource` rather than a `Transactor`, and imports left unused once Magnum's own `Instant` codec replaced ours. The risk was the new `readSingleOption`: a careless `Some(readSingle(...))` turns every NULL into `Some(null)`. `TestDbCodecs` reads NULL through each of our codecs, so that mistake now fails a test.
 
 **Scala 3.9** is still RC. Do not take 3.3.8 LTS instead — that is the JDK-8-era line and a two-year step back.
 

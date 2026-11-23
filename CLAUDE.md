@@ -63,7 +63,7 @@ Rules that aren't derivable from reading the code. Follow them; they exist becau
 
 **Rules by location.** Scala style and ZIO idioms ([`scala.md`](.claude/rules/scala.md)), tests ([`tests.md`](.claude/rules/tests.md)) and the CLI ([`cli.md`](.claude/rules/cli.md)) live in `.claude/rules/`, each loaded when you touch a file its `paths:` header covers. Read the matching one first when you create a covered file before opening any, or edit one after a compaction.
 
-**SQL.** Write methods return the number of rows affected, not `Unit`. Record names once per transaction (`Player.writeBatch` for batches; [0020](docs/adr/0020-claims-on-one-name-queue.md)). Never use `ChessComClient` inside `withTransaction`: the connection and locks would stay held across the round trip, and the client dies if you try (#300). Prefer `UNION ALL` over `UNION` where deduplication isn't needed. Magnum specifics: a custom `DbCodec` must not throw on `null`, because Magnum's `OptionCodec` reads the value *before* checking `wasNull`; and interpolating a bare enum case (`${TriggerType.Interval}`) into `sql""` emits no placeholder and produces a syntax error — widen the value to the enum type first.
+**SQL.** Write methods return the number of rows affected, not `Unit`. Record names once per transaction (`Player.writeBatch` for batches; [0020](docs/adr/0020-claims-on-one-name-queue.md)). Never use `ChessComClient` inside `withTransaction`: the connection and locks would stay held across the round trip, and the client dies if you try (#300). Prefer `UNION ALL` over `UNION` where deduplication isn't needed.
 
 **Output files.** Apps that write reports go through `OutputFile` (`ccas.analysis.apps`), which owns the layout and archives earlier output. Don't hand-roll paths.
 

@@ -13,7 +13,6 @@ import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo, Username}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ApiFetchFailure, BodyStore}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.connectZIO
 
 object TestRecruitmentFilterChain extends ZIOSpecDefault {

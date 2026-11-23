@@ -29,7 +29,6 @@ import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, PlayerId, Username
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, TestChessComClientSupport}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 
 object TestMembershipAppIntegration extends ZIOSpecDefault {

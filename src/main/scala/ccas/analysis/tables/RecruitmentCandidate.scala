@@ -68,8 +68,7 @@ object RecruitmentCandidate {
 
   def selectInvitedByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
-      val invited: CandidateOutcome = CandidateOutcome.Invited
-      sql"""SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = $invited
+      sql"""SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = ${CandidateOutcome.Invited}
             ORDER BY player_id"""
         .query[RecruitmentCandidate].run().toList
     }
@@ -79,10 +78,9 @@ object RecruitmentCandidate {
     clubId: ClubId
   ): ZIO[PostgresClient, SQLException, Option[RecruitmentCandidate]] =
     connectZIO {
-      val invited: CandidateOutcome = CandidateOutcome.Invited
       sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
-            WHERE rc.player_id = $playerId AND rr.club_id = $clubId AND rc.outcome = $invited
+            WHERE rc.player_id = $playerId AND rr.club_id = $clubId AND rc.outcome = ${CandidateOutcome.Invited}
             ORDER BY rc.evaluated_at DESC LIMIT 1""".query[RecruitmentCandidate].run().headOption
     }
 
@@ -92,14 +90,13 @@ object RecruitmentCandidate {
     alias: String
   ): ZIO[PostgresClient, SQLException, Option[RecruitmentCandidate]] =
     connectZIO {
-      val rejected: CandidateOutcome = CandidateOutcome.Rejected
       sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
             WHERE rc.player_id = $playerId AND rr.club_id = $clubId
               AND rr.criteria_id IN (
                 SELECT criteria_id FROM recruitment_alias WHERE club_id = $clubId AND alias = $alias
               )
-              AND rc.outcome = $rejected
+              AND rc.outcome = ${CandidateOutcome.Rejected}
             ORDER BY rc.evaluated_at DESC LIMIT 1""".query[RecruitmentCandidate].run().headOption
     }
 
@@ -110,8 +107,7 @@ object RecruitmentCandidate {
     dayOf: Instant
   ): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
-      val invited: CandidateOutcome = CandidateOutcome.Invited
-      val day                       = RecruitmentRun.UtcDay.of(dayOf)
+      val day = RecruitmentRun.UtcDay.of(dayOf)
       // Spans every run today, so a player invited in more than one run has multiple rows. DISTINCT ON keeps one
       // per player — the latest invite wins — and leads ORDER BY with player_id so the output stays ascending.
       sql"""SELECT DISTINCT ON (rc.player_id) $selectColsRc FROM recruitment_candidate rc
@@ -121,7 +117,7 @@ object RecruitmentCandidate {
             )
               AND rr.completed_at IS NOT NULL
               AND rr.started_at >= ${day.start} AND rr.started_at < ${day.end}
-              AND rc.outcome = $invited
+              AND rc.outcome = ${CandidateOutcome.Invited}
             ORDER BY rc.player_id, rc.evaluated_at DESC, rc.run_id DESC"""
         .query[RecruitmentCandidate].run().toList
     }
@@ -135,18 +131,15 @@ object RecruitmentCandidate {
   /** How many of a run's `Deferred` rows are not among `foundIds`: the candidates it holds for the next run. */
   def selectHeldCountByRun(runId: RecruitmentRunId, foundIds: List[PlayerId]): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      val deferred: CandidateOutcome = CandidateOutcome.Deferred
       sql"""SELECT COUNT(*) FROM recruitment_candidate
-            WHERE run_id = $runId AND outcome = $deferred AND player_id <> ALL($foundIds)"""
+            WHERE run_id = $runId AND outcome = ${CandidateOutcome.Deferred} AND player_id <> ALL($foundIds)"""
         .query[Int].run().headOption
     }.someOrFail(new SQLException("COUNT query produced no rows"))
 
   def selectRejectionCountsByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, List[RejectionCount]] =
     connectZIO {
-      val rejected: CandidateOutcome          = CandidateOutcome.Rejected
-      val rejectedFromCache: CandidateOutcome = CandidateOutcome.RejectedFromCache
       sql"""SELECT rejection_reason, outcome, COUNT(*) FROM recruitment_candidate
-            WHERE run_id = $runId AND outcome IN ($rejected, $rejectedFromCache)
+            WHERE run_id = $runId AND outcome IN (${CandidateOutcome.Rejected}, ${CandidateOutcome.RejectedFromCache})
             GROUP BY rejection_reason, outcome"""
         .query[RejectionCount].run().toList
     }
@@ -159,13 +152,11 @@ object RecruitmentCandidate {
   // by player_id to match `selectInvitedByRun` and `confirmDeferredByRun`.
   def selectDeferredByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
-      val deferred: CandidateOutcome = CandidateOutcome.Deferred
-      val invited: CandidateOutcome  = CandidateOutcome.Invited
-      sql"""SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = $deferred
+      sql"""SELECT $selectCols FROM recruitment_candidate WHERE run_id = $runId AND outcome = ${CandidateOutcome.Deferred}
             ORDER BY player_id
             LIMIT (SELECT CASE WHEN rr.target IS NULL THEN NULL
                                ELSE GREATEST(rr.target - (SELECT COUNT(*) FROM recruitment_candidate
-                                                          WHERE run_id = $runId AND outcome = $invited), 0)
+                                                          WHERE run_id = $runId AND outcome = ${CandidateOutcome.Invited}), 0)
                           END
                    FROM recruitment_run rr WHERE rr.run_id = $runId)"""
         .query[RecruitmentCandidate].run().toList
@@ -179,36 +170,30 @@ object RecruitmentCandidate {
   // update `recruitment_run.candidates_found`.
   def confirmDeferredByRun(runId: RecruitmentRunId): ZIO[PostgresClient, SQLException, Int] =
     connectZIO {
-      val invited: CandidateOutcome  = CandidateOutcome.Invited
-      val deferred: CandidateOutcome = CandidateOutcome.Deferred
-      sql"""UPDATE recruitment_candidate SET outcome = $invited
+      sql"""UPDATE recruitment_candidate SET outcome = ${CandidateOutcome.Invited}
             WHERE run_id = $runId AND player_id IN (
               SELECT player_id FROM recruitment_candidate
-              WHERE run_id = $runId AND outcome = $deferred
+              WHERE run_id = $runId AND outcome = ${CandidateOutcome.Deferred}
               ORDER BY player_id
               LIMIT (SELECT CASE WHEN rr.target IS NULL THEN NULL
                                  ELSE GREATEST(rr.target - (SELECT COUNT(*) FROM recruitment_candidate
-                                                            WHERE run_id = $runId AND outcome = $invited), 0)
+                                                            WHERE run_id = $runId AND outcome = ${CandidateOutcome.Invited}), 0)
                             END
                      FROM recruitment_run rr WHERE rr.run_id = $runId)
-            ) AND outcome = $deferred""".update.run()
+            ) AND outcome = ${CandidateOutcome.Deferred}""".update.run()
     }
 
   /** Returns deferred candidates for a club that a later run has not invited or rejected, from cache or not. */
   def selectDeferredByClub(clubId: ClubId): ZIO[PostgresClient, SQLException, List[RecruitmentCandidate]] =
     connectZIO {
-      val deferred: CandidateOutcome          = CandidateOutcome.Deferred
-      val invited: CandidateOutcome           = CandidateOutcome.Invited
-      val rejected: CandidateOutcome          = CandidateOutcome.Rejected
-      val rejectedFromCache: CandidateOutcome = CandidateOutcome.RejectedFromCache
       sql"""SELECT $selectColsRc FROM recruitment_candidate rc
             JOIN recruitment_run rr ON rc.run_id = rr.run_id
-            WHERE rr.club_id = $clubId AND rc.outcome = $deferred
+            WHERE rr.club_id = $clubId AND rc.outcome = ${CandidateOutcome.Deferred}
               AND NOT EXISTS (
                 SELECT 1 FROM recruitment_candidate rc2
                 JOIN recruitment_run rr2 ON rc2.run_id = rr2.run_id
                 WHERE rr2.club_id = $clubId AND rc2.player_id = rc.player_id
-                  AND rc2.outcome IN ($invited, $rejected, $rejectedFromCache)
+                  AND rc2.outcome IN (${CandidateOutcome.Invited}, ${CandidateOutcome.Rejected}, ${CandidateOutcome.RejectedFromCache})
                   AND rc2.evaluated_at > rc.evaluated_at
               )
             ORDER BY rc.evaluated_at DESC"""

@@ -8,7 +8,6 @@ import zio.ZIO
 
 import ccas.api.misc.enums.BoardGameWinner
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, PlayerId}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
 

@@ -12,7 +12,6 @@ import ccas.analysis.tables.subtypes.JobRunId
 import ccas.api.misc.subtypes.ClubId
 import ccas.server.jobs.JobKind.given
 import ccas.server.jobs.JobRunStatus.given
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 

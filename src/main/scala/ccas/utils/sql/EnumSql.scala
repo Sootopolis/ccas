@@ -8,12 +8,8 @@ trait EnumSql[T <: reflect.Enum] {
   protected def encodingNaming(scalaString: String): String = scalaString
   protected def decodingNaming(sqlString: String): String   = sqlString
 
-  // null.asInstanceOf[T] is safe here: JDBC returns null for SQL NULL columns,
-  // and Magnum's DbCodec protocol expects null passthrough for nullable fields.
   given DbCodec[T] = DbCodec[String].biMap(
-    to = string =>
-      if (string == null) { null.asInstanceOf[T] }
-      else { valueOf(decodingNaming(string)) },
+    to = string => valueOf(decodingNaming(string)),
     from = member => encodingNaming(member.toString)
   )
 }

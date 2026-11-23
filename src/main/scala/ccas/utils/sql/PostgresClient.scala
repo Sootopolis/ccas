@@ -9,14 +9,14 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.logging.Logger as JLogger
 import javax.sql.DataSource
 
-import com.augustnagro.magnum.{DbCon, DbTx, Transactor}
+import com.augustnagro.magnum.{DbCon, DbTx}
 import com.typesafe.config.{Config, ConfigFactory}
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
 import zio.*
 
 /** Database client for PostgreSQL with connection management and transient-error retry.
   *
-  * Wraps a Magnum `Transactor` (backed by HikariCP) and adds:
+  * Runs Magnum statements on a `DataSource` (HikariCP in production) and adds:
   *   - '''Connection pool hardening''' — validation queries, socket timeouts, and lazy initialisation tolerant of cold
   *     starts (e.g. Neon serverless).
   *   - '''Transient-error retry''' — exponential backoff on connection-class errors (SQLState `08xxx`) so callers don't
@@ -30,7 +30,7 @@ import zio.*
   * @param addressOption where the pool connects, for naming it to an operator; see [[PostgresClient.databaseAddress]]
   */
 final class PostgresClient private (
-  private[sql] val transactor: Transactor,
+  private[sql] val dataSource: DataSource,
   val addressOption: Option[DatabaseAddress],
   private val retryBaseDelay: Duration,
   private val retryMaxRetries: Int
@@ -49,14 +49,14 @@ final class PostgresClient private (
 
   /** Run a read-only block with a pooled connection, retrying on transient errors. */
   def connect[A](f: DbCon ?=> A): IO[SQLException, A] =
-    ZIO.attemptBlockingInterrupt(com.augustnagro.magnum.connect(transactor)(f))
+    ZIO.attemptBlockingInterrupt(com.augustnagro.magnum.connect(dataSource)(f))
       .mapError(unwrapSqlCause)
       .refineToOrDie[SQLException]
       .retry(retrySchedule)
 
   /** Run a single-statement write in its own transaction, retrying on transient errors. */
   def transact[A](f: DbTx ?=> A): IO[SQLException, A] =
-    ZIO.attemptBlockingInterrupt(com.augustnagro.magnum.transact(transactor)(f))
+    ZIO.attemptBlockingInterrupt(com.augustnagro.magnum.transact(dataSource)(f))
       .mapError(unwrapSqlCause)
       .refineToOrDie[SQLException]
       .retry(retrySchedule)
@@ -76,10 +76,9 @@ final class PostgresClient private (
       for {
         conn <- checkOut
         _    <- ZIO.attemptBlocking(conn.setAutoCommit(false)).refineToOrDie[SQLException]
-        proxy    = transactionProxy(conn)
-        scopedXa = transactor.copy(dataSource = SingleConnectionDataSource(proxy))
+        proxy = transactionProxy(conn)
         txClient = new PostgresClient(
-          transactor = scopedXa,
+          dataSource = SingleConnectionDataSource(proxy),
           addressOption = addressOption,
           retryBaseDelay = retryBaseDelay,
           retryMaxRetries = 0
@@ -99,7 +98,7 @@ final class PostgresClient private (
       val slot = new AtomicReference[Connection]
       ZIO.acquireReleaseInterruptible(
         ZIO.attemptBlockingInterrupt {
-          val conn = transactor.dataSource.getConnection
+          val conn = dataSource.getConnection
           slot.set(conn)
           conn
         }.refineToOrDie[SQLException]
@@ -409,7 +408,7 @@ object PostgresClient {
         }
         hikariDs <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(new HikariDataSource(settings.hikariConfig)))
         client = new PostgresClient(
-          transactor = Transactor(hikariDs),
+          dataSource = hikariDs,
           addressOption = settings.addressOption,
           retryBaseDelay = settings.retryBaseDelay,
           retryMaxRetries = settings.retryMaxRetries
@@ -436,7 +435,7 @@ object PostgresClient {
     retryMaxRetries: Int = 3
   ): PostgresClient =
     new PostgresClient(
-      transactor = Transactor(dataSource),
+      dataSource = dataSource,
       addressOption = None,
       retryBaseDelay = retryBaseDelay,
       retryMaxRetries = retryMaxRetries

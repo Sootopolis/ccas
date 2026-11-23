@@ -8,7 +8,6 @@ import zio.ZIO
 
 import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId}
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
@@ -120,8 +119,7 @@ object ClubMatch {
     */
   def inferClubMatchRef(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[ClubMatchRef]] =
     connectZIO {
-      val daily: TimeClass = TimeClass.Daily
-      sql"""SELECT match_id, (time_class != $daily) AS is_live, (team1_club_id = $clubId) AS is_team1
+      sql"""SELECT match_id, (time_class != ${TimeClass.Daily}) AS is_live, (team1_club_id = $clubId) AS is_team1
             FROM club_match
             WHERE team1_club_id = $clubId OR team2_club_id = $clubId
             LIMIT 1""".query[(ClubMatchId, Boolean, Boolean)].run().headOption.map { case (matchId, isLive, isTeam1) =>

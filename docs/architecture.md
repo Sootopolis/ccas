@@ -90,13 +90,13 @@ A polling daemon on a configurable interval that checks enabled `JobSchedule` en
 
 ## Database
 
-Magnum (`com.augustnagro.magnum`) over PostgreSQL. `PostgresClient` (`ccas.utils.sql`) wraps a Magnum `Transactor` backed by HikariCP, adding connection-pool hardening (validation queries, lazy initialisation, socket timeouts) and transient-error retry. `PostgresClient.live` reads config under the `database` prefix; all app and server code depends on `PostgresClient`, never on `Transactor`.
+Magnum (`com.augustnagro.magnum`) over PostgreSQL. `PostgresClient` (`ccas.utils.sql`) runs Magnum statements on a HikariCP pool, adding connection-pool hardening (validation queries, lazy initialisation, socket timeouts) and transient-error retry. `PostgresClient.live` reads config under the `database` prefix; all app and server code depends on `PostgresClient`, never on Magnum's `Transactor`.
 
 Each table is a case class that `derives DbCodec`, with a companion holding its `createTable` and its queries, often built on a `SqlLiteral` column list. Tables backed by Magnum's `Repo` / `ImmutableRepo` are also annotated `@Table(PostgresDbType, SqlNameMapper.CamelToSnakeCase)`, which derives their table and column names from the case class; the rest name them in their SQL.
 
 `connectZIO` and `transactZIO` (on the `PostgresClient` companion) bridge Magnum's context-function API to `ZIO[PostgresClient, SQLException, A]`. A single statement, read or write, runs through `connectZIO`; a block of statements that must commit together uses `transactZIO`; several calls that must commit together use `withTransaction`, which shares one proxied connection between them. All three check out on `attemptBlockingInterrupt`, so a cancel or shutdown aborts a fiber parked on pool checkout. They also retry transient connection errors (SQLState `08xxx`), `withTransaction` by rerunning the whole transaction, except a Hikari pool-checkout timeout, which fails fast rather than blocking for another `connectionTimeout`.
 
-Custom `DbCodec` instances handle `Instant` (via `TIMESTAMPTZ`), `URL`, and `List[String]` (PostgreSQL arrays).
+Custom `DbCodec` instances (`DbCodecs`) handle `URL` and `List` (PostgreSQL arrays); Magnum's own codec maps `Instant` to `TIMESTAMPTZ`.
 
 Server tables (`JobRun`, `JobSchedule`) reference clubs by `club_id` FK; route handlers resolve the club a request names to a `ClubId` before submitting. Analysis run tables (`MembershipRun`, `RecruitmentRun`, `HistoryRun`) carry an optional `job_run_id` linking back to the server-level job.
 

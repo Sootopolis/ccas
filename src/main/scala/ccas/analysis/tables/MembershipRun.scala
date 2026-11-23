@@ -9,7 +9,6 @@ import zio.ZIO
 import ccas.analysis.tables.RunTrigger.given
 import ccas.analysis.tables.subtypes.{JobRunId, MembershipRunId}
 import ccas.api.misc.subtypes.ClubId
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 
@@ -56,7 +55,7 @@ object MembershipRun {
   def selectLatestReported(clubId: ClubId): ZIO[PostgresClient, SQLException, Option[MembershipRun]] =
     connectZIO {
       sql"""SELECT $selectCols FROM membership_run
-            WHERE club_id = $clubId AND completed_at IS NOT NULL AND trigger <> ${RunTrigger.Dependency: RunTrigger}
+            WHERE club_id = $clubId AND completed_at IS NOT NULL AND trigger <> ${RunTrigger.Dependency}
             ORDER BY completed_at DESC LIMIT 1"""
         .query[MembershipRun].run().headOption
     }

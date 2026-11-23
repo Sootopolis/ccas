@@ -6,7 +6,6 @@ import com.augustnagro.magnum.*
 
 import ccas.utils.sql.AdvisoryLock
 import ccas.utils.sql.AdvisoryLock.Space
-import ccas.utils.sql.DbCodecs.given
 
 /** How writers moving the same names between holders queue, not race (ADR 0020). A writer holds its whole space in
   * shared mode and each of its names exclusively, or the whole space exclusively when it moves more names than one

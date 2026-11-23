@@ -9,7 +9,6 @@ import zio.ZIO
 import ccas.analysis.tables.RunTrigger.given
 import ccas.analysis.tables.subtypes.{HistoryRunId, JobRunId}
 import ccas.api.misc.subtypes.ClubId
-import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
 

@@ -1,6 +1,6 @@
 # Stay with Magnum for SQL access
 
-**Status:** Accepted, 2026-03-14. Recorded here from #206.
+**Status:** Accepted, 2026-03-14. Recorded here from #206. Amended by #536 (Magnum 2.0.0).
 
 ## Context
 
@@ -8,7 +8,7 @@ CCAS reaches PostgreSQL through Magnum: raw SQL in `sql""` interpolators, with r
 
 `PostgresClient.withTransaction` (8ad9968, 2026-03-14) solved that problem without Quill. It runs a multi-statement ZIO effect on one connection, commits or rolls back once, and retries the whole transaction, not single statements.
 
-What is still awkward about Magnum is minor: SQL lives in strings, enums are converted by hand, and conditional queries are clumsy. Two of its pitfalls are listed under SQL in `CLAUDE.md`.
+What is still awkward about Magnum is minor: SQL lives in strings, enums are converted by hand, and conditional queries are clumsy. Two of its pitfalls were listed under SQL in `CLAUDE.md` until Magnum 2.0.0 removed them.
 
 ## Decision
 
@@ -19,8 +19,8 @@ At the time, a migration meant rewriting more than 50 query methods across 16 en
 ## Consequences
 
 - SQL stays as raw strings, and the tests against Postgres are what check it. Nothing checks queries at compile time.
-- The two Magnum pitfalls in `CLAUDE.md` stay until Magnum 2.0 is stable. Its milestones fix both. The version we pin, why it is held, and what moving to 2.0 would cost are in [0002](0002-dependency-decisions-2026-08.md).
-- Magnum's upstream work all happens on the 2.0 line, so the risk of staying is that our version goes stale, not that the library is a poor fit.
+- The two Magnum pitfalls once listed in `CLAUDE.md`, a codec meeting `null` and a bare enum case in `sql""`, went with the move to Magnum 2.0.0 (#536). What the move cost is in [0002](0002-dependency-decisions-2026-08.md).
+- The risk of staying is that our version goes stale, not that the library is a poor fit. Upstream works on the 2.0 line, which we are on since #536.
 
 ## Revisit when
 

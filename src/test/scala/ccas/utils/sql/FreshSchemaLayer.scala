@@ -34,7 +34,7 @@ object FreshSchemaLayer {
       ZIO.attempt(require(schemaNamePattern.matches(schema), s"Invalid schema name: $schema")) *>
         ZIO.scoped {
           for {
-            conn    <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(pgClient.transactor.dataSource.getConnection))
+            conn    <- ZIO.fromAutoCloseable(ZIO.attemptBlocking(pgClient.dataSource.getConnection))
             catalog <- ZIO.attemptBlocking(conn.getCatalog)
             // Refuse to DROP SCHEMA anywhere but a test database. The test config nulls `database.url` so an exported
             // DATABASE_URL cannot redirect the suite; this is the second line, checked against the live connection so
