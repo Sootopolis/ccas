@@ -22,8 +22,8 @@ import ccas.analysis.tables.{
   RecruitmentRun,
   RunTrigger
 }
-import ccas.analysis.tables.subtypes.RecruitmentRunId
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, Username}
+import ccas.analysis.tables.subtypes.{JobRunId, RecruitmentRunId}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.server.jobs.*
 import ccas.server.routes.RouteHelpers.*
 import ccas.utils.TimeParser

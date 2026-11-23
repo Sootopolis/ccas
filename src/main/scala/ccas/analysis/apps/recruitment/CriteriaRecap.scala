@@ -5,8 +5,8 @@ import java.time.format.DateTimeFormatter
 
 import zio.{RIO, ZIO}
 
-import ccas.analysis.apps.recruitment.RecruitmentStatsHelpers.StatsWindowDays
 import ccas.analysis.tables.{Club, RecruitmentAlias, RecruitmentCriteria}
+import ccas.analysis.tables.PlayerRecruitmentCache.StatsWindowDays
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Elo}
 import ccas.utils.sql.PostgresClient
 

@@ -10,7 +10,8 @@ import zio.json.EncoderOps
 import zio.stream.{SubscriptionRef, ZStream}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
+import ccas.analysis.tables.subtypes.JobRunId
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.{AppDir, BarSnapshot, JobLogSink, ProgressDisplay, ProgressSnapshot}
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{safeMessage, ConflictException}

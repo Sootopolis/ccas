@@ -6,7 +6,8 @@ import com.augustnagro.magnum.sql
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{Club, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
+import ccas.analysis.tables.subtypes.JobRunId
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.ServerTables
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO

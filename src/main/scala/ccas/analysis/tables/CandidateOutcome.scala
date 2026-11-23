@@ -1,4 +1,4 @@
-package ccas.analysis.apps.recruitment
+package ccas.analysis.tables
 
 import ccas.utils.sql.EnumSql
 

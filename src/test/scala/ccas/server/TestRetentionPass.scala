@@ -5,7 +5,8 @@ import zio.stream.ZStream
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault, ZTestLogger}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, JobRunId}
+import ccas.analysis.tables.subtypes.JobRunId
+import ccas.api.misc.subtypes.ClubId
 import ccas.server.jobs.{JobKind, JobLogs, JobRun, JobRunner}
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}

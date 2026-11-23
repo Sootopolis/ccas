@@ -14,7 +14,7 @@ import ccas.analysis.apps.recruitment.RecruitmentTestSupport.*
 import ccas.analysis.tables.*
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug, Elo, PlayerId, Username}
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.BodyStore
+import ccas.utils.client.{ApiFetchFailure, BodyStore}
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
 

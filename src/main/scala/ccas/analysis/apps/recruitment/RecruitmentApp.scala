@@ -19,15 +19,22 @@ import zio.{
   ZIOAppDefault
 }
 
-import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution, ClubSlugRenameResolver, NamedClub}
+import ccas.analysis.apps.{
+  withClubSlugRenameRecovery,
+  ClubQuery,
+  ClubResolution,
+  ClubSlugRenameResolver,
+  NamedClub,
+  OutputFile
+}
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.*
-import ccas.analysis.tables.subtypes.RecruitmentRunId
+import ccas.analysis.tables.subtypes.{JobRunId, RecruitmentRunId}
 import ccas.api.club.{ApiClubMatches, ApiClubMembers}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId, PlayerId, Username}
+import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId, Username}
 import ccas.api.player.ApiPlayer
-import ccas.utils.{display, OutputFile, ProgressDisplay, YesNo}
+import ccas.utils.{display, ProgressDisplay, YesNo}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.{BadRequestException, ConflictException, NotFoundException}
 import ccas.utils.sql.PostgresClient

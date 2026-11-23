@@ -10,8 +10,15 @@ import zio.http.*
 import ccas.analysis.apps.TestTimes
 import ccas.analysis.apps.membership.MembershipChange.StoredRoster
 import ccas.analysis.apps.membership.MembershipClassify.{PhaseBResult, PhaseCResult}
-import ccas.analysis.apps.recruitment.CandidateOutcome
-import ccas.analysis.tables.{Club, ClubMember, Player, PlayerMatchRef, PlayerSnapshot, RecruitmentCandidate}
+import ccas.analysis.tables.{
+  CandidateOutcome,
+  Club,
+  ClubMember,
+  Player,
+  PlayerMatchRef,
+  PlayerSnapshot,
+  RecruitmentCandidate
+}
 import ccas.analysis.tables.subtypes.RecruitmentRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
 import ccas.utils.client.{BodyStore, ChessComClient, TestChessComClientSupport}

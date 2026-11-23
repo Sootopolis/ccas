@@ -14,7 +14,8 @@ import zio.{durationInt, Duration, Executor, Promise, Ref, UIO, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
-import ccas.api.misc.subtypes.{ClubId, ClubSlug, JobRunId}
+import ccas.analysis.tables.subtypes.JobRunId
+import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.ServerTables
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.TestChessComClientSupport

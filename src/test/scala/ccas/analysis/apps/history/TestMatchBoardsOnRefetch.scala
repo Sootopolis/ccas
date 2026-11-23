@@ -12,7 +12,7 @@ import ccas.api.clubmatch.ApiDailyMatch
 import ccas.api.misc.enums.{ClubMatchStatus, TimeClass}
 import ccas.api.misc.subtypes.{ClubId, ClubMatchId, ClubSlug}
 import ccas.utils.ProgressDisplay
-import ccas.utils.client.TestChessComClientSupport
+import ccas.utils.client.{ApiFetchFailure, TestChessComClientSupport}
 import ccas.utils.json.JsonDecodingException
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient}
 

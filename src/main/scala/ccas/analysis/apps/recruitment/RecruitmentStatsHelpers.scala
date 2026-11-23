@@ -6,6 +6,7 @@ import java.time.temporal.ChronoUnit
 import zio.{RIO, ZIO}
 
 import ccas.analysis.apps.withPlayerRenameRecovery
+import ccas.analysis.tables.PlayerRecruitmentCache.StatsWindowDays
 import ccas.analysis.tables.RecruitmentCriteria
 import ccas.api.misc.enums.GameResultDetail
 import ccas.api.misc.subtypes.{PlayerId, Username}
@@ -14,8 +15,6 @@ import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient
 
 private[recruitment] object RecruitmentStatsHelpers {
-
-  val StatsWindowDays = 90
 
   /** Reads the games, `recentArchivesOption`'s included, as `username`'s — or as the fresh handle when a month's fetch
     * recovered a rename — and returns the handle it used.

@@ -8,7 +8,8 @@ import zio.ZIO
 
 import ccas.analysis.tables.RunTrigger
 import ccas.analysis.tables.RunTrigger.given
-import ccas.api.misc.subtypes.{ClubId, JobRunId}
+import ccas.analysis.tables.subtypes.JobRunId
+import ccas.api.misc.subtypes.ClubId
 import ccas.server.jobs.JobKind.given
 import ccas.server.jobs.JobRunStatus.given
 import ccas.utils.sql.DbCodecs.given

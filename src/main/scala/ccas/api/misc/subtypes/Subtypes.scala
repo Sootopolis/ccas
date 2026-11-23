@@ -1,6 +1,5 @@
 package ccas.api.misc.subtypes
 
-import com.github.f4b6a3.ulid.UlidCreator
 import zio.http.URL
 
 import ccas.utils.opaque.{LongCompanion, ShortCompanion, StringCompanion, StringKeyCompanion}
@@ -85,10 +84,4 @@ object TournamentSlug extends StringCompanion {
     msg => throw new IllegalArgumentException(s"$name.fromUrl($url): $msg"),
     identity
   )
-}
-
-type JobRunId = JobRunId.Type
-
-object JobRunId extends StringCompanion {
-  def generate(): JobRunId = wrap(UlidCreator.getMonotonicUlid().toString)
 }

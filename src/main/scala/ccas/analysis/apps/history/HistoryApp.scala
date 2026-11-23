@@ -20,11 +20,12 @@ import zio.{
 
 import HistoryUtils.*
 
+import ccas.analysis.apps.OutputFile
 import ccas.analysis.apps.membership.MembershipApp
 import ccas.analysis.tables.*
-import ccas.analysis.tables.subtypes.HistoryRunId
+import ccas.analysis.tables.subtypes.{HistoryRunId, JobRunId}
 import ccas.api.misc.subtypes.*
-import ccas.utils.{display, OutputFile, ProgressDisplay}
+import ccas.utils.{display, ProgressDisplay}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient

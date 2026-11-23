@@ -6,9 +6,9 @@ import snapshot4s.generated.snapshotConfig
 import zio.test.{Spec, ZIOSpecDefault}
 
 import ccas.analysis.apps.TestTimes
-import ccas.analysis.apps.recruitment.CandidateOutcome.{Rejected, RejectedFromCache}
-import ccas.analysis.apps.recruitment.RejectionReason.*
 import ccas.analysis.tables.{RecruitmentAlias, RecruitmentCriteria, RejectionCount}
+import ccas.analysis.tables.CandidateOutcome.{Rejected, RejectedFromCache}
+import ccas.analysis.tables.RejectionReason.*
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.server.jobs.JobLogFile
 import ccas.utils.ZioSnapshots

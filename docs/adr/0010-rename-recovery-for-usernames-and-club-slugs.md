@@ -1,6 +1,6 @@
 # Recover renamed usernames and club slugs instead of treating a 404 as death
 
-**Status:** Accepted, 2026-05-07 (#23); the tombstone consequence superseded in part by [0016](0016-identity-is-the-id-names-are-observations.md) (#254) — for clubs 2026-09-21, for players 2026-09-26. Neither `club.slug` nor `player.username` carries a unique index any more, so nothing needs a `_stale_<id>` to free a slot, and the code writes none: a club or player whose name another has taken holds none in `club_name` / `player_name`. The tier design below stays live for both.
+**Status:** Accepted, 2026-05-07 (#23); the tombstone consequence superseded in part by [0016](0016-identity-is-the-id-names-are-observations.md) (#254) — for clubs 2026-09-21, for players 2026-09-26. Neither `club.slug` nor `player.username` carries a unique index any more, so nothing needs a `_stale_<id>` to free a slot, and the code writes none: a club or player whose name another has taken holds none in `club_name` / `player_name`. The tier design below stays live for both. Amended by #504 (Tier B's club lookup moved into `ClubSlugRenameResolver`).
 
 ## Context
 
@@ -13,7 +13,7 @@ A 404 is also not stable over time: `"X not found"` bodies are timeline-unstable
 `UsernameRenameResolver` and `ClubSlugRenameResolver` (`ccas.analysis.apps`) recover the current canonical name, in tiers, cheapest first. `ZIO.collectFirst` runs each tier only when the previous one returned `None`.
 
 - **Tier A — pure DB lookup.** `Player.selectByUsername` plus `PlayerSnapshot.selectLatestPlayerIdByUsername` for players; `Club.selectId` for clubs. Succeeds whenever our DB already learned the rename by some other path.
-- **Tier B — the board-endpoint trick.** `PlayerMatchRef.findOrInfer` → `ApiMatchBoard`, eliminating the opposing side's known canonical name; or `Club.slugFromMatchRef` → the match's team URL.
+- **Tier B — the board-endpoint trick.** `PlayerMatchRef.findOrInfer` → `ApiMatchBoard`, eliminating the opposing side's known canonical name; or `ClubSlugRenameResolver.slugFromMatchRef` → the match's team URL.
 - **Tier C — admin clubs (clubs only).** Closes the gap for a club that has never played a match, where Tier B is a no-op. Loads stored `ClubAdmin` rows for the `clubIdHint`, fetches each non-tombstoned admin's `/pub/player/{u}/clubs`, filters out slugs a known club holds now via `ClubName.selectHeldSlugs` (those would have surfaced in Tier A), and returns the first slug whose verified `ApiClub.clubId` matches the hint. Bounded by the admin count, short-circuits on first hit. `ClubDataApp.refreshClub` passes `Some(club.clubId)`, so Tier C is reachable from the typical call site.
 
 Tier A accepts an unambiguous match only. With a `playerIdHint` it can detect a recycled handle directly — the freed username re-registered by someone else — and without one it accepts a snapshot match only when exactly one player matches.

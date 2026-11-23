@@ -1,4 +1,4 @@
-package ccas.utils
+package ccas.analysis.apps
 
 import java.nio.file.{FileAlreadyExistsException, Files, NoSuchFileException, Path}
 import java.nio.file.StandardOpenOption.CREATE_NEW
@@ -11,6 +11,7 @@ import scala.util.Using
 import zio.{Clock, Task, UIO, ZIO}
 
 import ccas.api.misc.subtypes.ClubSlug
+import ccas.utils.AppDir
 import ccas.utils.errors.safeMessageNaming
 
 /** Where an app writes a report. Each write first moves the app's earlier output in that directory into `archive/`.

@@ -1,4 +1,4 @@
-package ccas.analysis.tables
+package ccas.utils.client
 
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -7,10 +7,14 @@ import java.sql.SQLException
 import com.augustnagro.magnum.*
 import zio.{URIO, ZIO}
 
-import ccas.analysis.tables.subtypes.ApiResponseBodyId
-import ccas.utils.client.{BodyRead, BodyStore}
+import ccas.utils.opaque.PositiveLongCompanion
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, withTransaction}
+
+/** `api_response_body.body_id`: a `BIGSERIAL` surrogate, so it starts at 1. */
+type ApiResponseBodyId = ApiResponseBodyId.Type
+
+object ApiResponseBodyId extends PositiveLongCompanion
 
 /** Content-addressed pointer index for cached Chess.com response bodies. Since #191 the bodies themselves live in a
   * [[BodyStore]] (Cloudflare R2 in prod, local filesystem in dev/test), keyed by the SHA-256 hash — the blob cache is
@@ -119,7 +123,7 @@ object ApiResponseBody {
     * them inside would hold a pooled connection idle-in-transaction for the length of the sweep. Returns the caller's
     * own row count. Shared by the retention sweeps in [[ApiResponseCache]] and [[ApiFetchFailure]].
     */
-  private[tables] def deleteRowsAndSweepOrphans(
+  private[client] def deleteRowsAndSweepOrphans(
     deleteRows: ZIO[PostgresClient, SQLException, Int]
   ): ZIO[PostgresClient & BodyStore, SQLException, Int] =
     for {
@@ -135,14 +139,14 @@ object ApiResponseBody {
   /** Delete the objects behind already-committed freed hashes. Bounded-parallel: a retention sweep can free tens of
     * thousands of hashes and each delete is a round trip, so sequential was minutes of wall clock.
     */
-  private[tables] def deleteFreedObjects(hashes: List[String]): URIO[BodyStore, Unit] =
+  private[client] def deleteFreedObjects(hashes: List[String]): URIO[BodyStore, Unit] =
     ZIO.foreachParDiscard(hashes)(hash => BodyStore.delete(hash).ignore).withParallelism(ObjectDeleteParallelism)
 
   /** Deliberately modest: the sweep now runs against the same store the fetch path reads from, so a wide delete burst
     * buys sweep throughput with cache-read latency for its whole duration. Raise it from measurement
     * (`client_stats.cache_unserved` during a sweep), not from argument.
     */
-  private[tables] val ObjectDeleteParallelism = 8
+  private[client] val ObjectDeleteParallelism = 8
 
   private def sha256(input: String): String = {
     val digest = MessageDigest.getInstance("SHA-256")

@@ -6,13 +6,10 @@ import java.time.Instant
 import scala.util.chaining.*
 
 import com.augustnagro.magnum.*
-import zio.{Task, ZIO}
+import zio.ZIO
 
-import ccas.analysis.apps.ref.RefHelpers
 import ccas.api.club.ApiClub
-import ccas.api.clubmatch.TeamMatchTeams
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
-import ccas.utils.client.ChessComClient
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO}
@@ -82,29 +79,6 @@ object Club {
     connectZIO {
       sql"UPDATE club SET fetched_at = $at WHERE club_id = $clubId".update.run()
     }
-
-  /** The name the club's own match board reports for it — Tier B of slug-rename recovery. Reads a [[ClubMatchRef]],
-    * explicit row first and otherwise inferred from `club_match` and promoted via [[ClubMatchRef.findOrInfer]], then
-    * takes the slug from that board's team URL. `None` is every way this comes to nothing quietly: no ref to read, or
-    * a match Chess.com reports gone — Tier B's answer to both is "try Tier C" (ADR 0019, #258). A board whose team
-    * URL names no club is a malformed response rather than an absence, so it fails; #275 would have the decoder say
-    * that instead.
-    */
-  def slugFromMatchRef(clubId: ClubId, client: ChessComClient): ZIO[PostgresClient, Throwable, Option[ClubSlug]] =
-    ClubMatchRef.findOrInfer(clubId).flatMap {
-      case None      => ZIO.none
-      case Some(ref) => teamsOfMatch(ref, client).flatMap(ZIO.foreach(_)(slugOfTeam(ref, _)))
-    }
-
-  private def teamsOfMatch(ref: ClubMatchRef, client: ChessComClient): Task[Option[TeamMatchTeams]] =
-    RefHelpers
-      .fetchTeamMatchTeamsResult(client, ref.matchId, ref.isLive)
-      .flatMap(_.foldZIO(_ => ZIO.none, _.getValue.asSome, _.getValue.asSome))
-
-  private def slugOfTeam(ref: ClubMatchRef, teams: TeamMatchTeams): Task[ClubSlug] =
-    ZIO.attempt(ClubSlug.fromUrl(if (ref.isTeam1) {
-      teams.team1.`@id`
-    } else { teams.team2.`@id` }))
 
   /** Builds a [[Club]] from an [[ApiClub]] response, reading the slug from `apiClub.canonicalSlug` — the name
     * Chess.com answers to now, not necessarily the one the caller requested. `latestMatchAt` and `fetchedAt` are

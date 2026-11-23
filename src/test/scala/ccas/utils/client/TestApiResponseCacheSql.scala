@@ -1,4 +1,4 @@
-package ccas.analysis.tables
+package ccas.utils.client
 
 import java.sql.SQLException
 import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
@@ -7,7 +7,7 @@ import com.augustnagro.magnum.sql
 import zio.ZIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
-import ccas.analysis.tables.subtypes.ApiResponseBodyId
+import ccas.analysis.tables.Tables
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO

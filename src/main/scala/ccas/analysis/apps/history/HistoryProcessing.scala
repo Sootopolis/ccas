@@ -13,7 +13,7 @@ import ccas.api.clubmatch.{ApiDailyMatch, ApiLiveMatch, ApiMatchBoard}
 import ccas.api.clubmatch.ApiDailyMatch.*
 import ccas.api.misc.subtypes.*
 import ccas.utils.{ApiConcurrency, ProgressBar, ProgressDisplay}
-import ccas.utils.client.{NetworkUnavailableException, ReportedNotFound}
+import ccas.utils.client.{ApiResponseBody, NetworkUnavailableException, ReportedNotFound}
 import ccas.utils.errors.safeMessage
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction

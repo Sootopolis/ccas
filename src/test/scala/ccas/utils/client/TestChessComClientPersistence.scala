@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 import zio.*
 import zio.test.*
 
-import ccas.analysis.tables.{ClientConfig, ClientStats, Tables}
+import ccas.analysis.tables.Tables
 import ccas.utils.sql.{FailOnceDataSource, FreshSchemaLayer, PostgresClient}
 
 object TestChessComClientPersistence extends ZIOSpecDefault {

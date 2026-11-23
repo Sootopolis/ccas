@@ -1,8 +1,8 @@
-package ccas.analysis.apps.recruitment
+package ccas.analysis.tables
 
-import ccas.analysis.apps.recruitment.RecruitmentStatsHelpers.StatsWindowDays
-import ccas.analysis.apps.recruitment.RejectionReason.Check
-import ccas.analysis.apps.recruitment.RejectionReason.Check.{Field, Standing}
+import ccas.analysis.tables.PlayerRecruitmentCache.StatsWindowDays
+import ccas.analysis.tables.RejectionReason.Check
+import ccas.analysis.tables.RejectionReason.Check.{Field, Standing}
 import ccas.utils.sql.EnumSql
 
 /** The check that rejected a candidate, stored by case name, so renaming a case is a data migration (#430). A report
@@ -51,7 +51,9 @@ object RejectionReason extends EnumSql[RejectionReason] {
 
   enum Check {
 
-    /** Enforces a criteria field, as [[CriteriaSpec]] names it; the qualifier tells apart two checks of one field. */
+    /** Enforces a criteria field, as recruitment's `CriteriaSpec` names it; the qualifier tells apart two checks of
+      * one field.
+      */
     case Field(name: String, qualifierOption: Option[String])
 
     /** Applies whatever the criteria say; `failure` is what the candidate did, in the operator's words. */

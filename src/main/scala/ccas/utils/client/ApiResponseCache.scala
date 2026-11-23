@@ -1,4 +1,4 @@
-package ccas.analysis.tables
+package ccas.utils.client
 
 import java.sql.SQLException
 import java.time.Instant
@@ -6,11 +6,15 @@ import java.time.Instant
 import com.augustnagro.magnum.*
 import zio.ZIO
 
-import ccas.analysis.tables.subtypes.{ApiResponseBodyId, ApiResponseCacheId}
-import ccas.utils.client.BodyStore
+import ccas.utils.opaque.PositiveLongCompanion
 import ccas.utils.sql.DbCodecs.given
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.{connectZIO, transactZIO, withTransaction}
+
+/** `api_response_cache.cache_id`: a `BIGSERIAL` surrogate, so it starts at 1. */
+type ApiResponseCacheId = ApiResponseCacheId.Type
+
+object ApiResponseCacheId extends PositiveLongCompanion
 
 /** Persistent cache of Chess.com API responses keyed by URL. Holds cache-control metadata (ETag, Last-Modified,
   * max-age) alongside a foreign key into `api_response_body` for the body itself — body storage is deduplicated

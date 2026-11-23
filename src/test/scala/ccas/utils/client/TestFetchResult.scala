@@ -4,7 +4,6 @@ import zio.*
 import zio.http.URL
 import zio.test.*
 
-import ccas.analysis.tables.subtypes.ApiResponseBodyId
 import ccas.utils.client.TestChessComClientSupport.reportedNotFoundBody
 
 /** Pure unit tests for `FetchResult`'s folds and `getValue`. No HTTP client, no DB — these just construct each

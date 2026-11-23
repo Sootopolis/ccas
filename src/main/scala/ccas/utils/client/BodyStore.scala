@@ -17,7 +17,7 @@ import ccas.utils.AppDir
 import ccas.utils.errors.safeMessage
 
 /** Content-addressed store for cached Chess.com response bodies, keyed by the hex SHA-256 already computed in
-  * [[ccas.analysis.tables.ApiResponseBody]] — so `put` is idempotent and dedup is preserved for free.
+  * [[ApiResponseBody]] — so `put` is idempotent and dedup is preserved for free.
   *
   * The trait is honest about I/O (`Task`); the degradation policy lives in the companion's accessors
   * ([[BodyStore.read]] / [[BodyStore.putOrSkip]]), which is what persistence code calls. The invariant those

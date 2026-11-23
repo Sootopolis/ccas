@@ -1,4 +1,4 @@
-package ccas.utils
+package ccas.analysis.apps
 
 import java.nio.file.{Files, Path, Paths}
 import java.time.{Instant, ZoneOffset}

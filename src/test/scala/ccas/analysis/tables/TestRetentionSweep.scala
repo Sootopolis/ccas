@@ -4,6 +4,7 @@ import java.time.{Duration, Instant, LocalDateTime, ZoneOffset}
 
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.utils.client.ApiResponseCache
 import ccas.utils.sql.FreshSchemaLayer
 
 /** Retention lives in its own schema on purpose: `retentionSweep` deletes every row past the retention window, which

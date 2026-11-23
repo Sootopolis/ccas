@@ -3,9 +3,8 @@ package ccas.analysis.apps.recruitment
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
-import RecruitmentStatsHelpers.StatsWindowDays
-
-import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria}
+import ccas.analysis.tables.{PlayerRecruitmentCache, RecruitmentCriteria, RejectionReason}
+import ccas.analysis.tables.PlayerRecruitmentCache.StatsWindowDays
 
 private[recruitment] final case class FigureCheck(
   cache: PlayerRecruitmentCache,
