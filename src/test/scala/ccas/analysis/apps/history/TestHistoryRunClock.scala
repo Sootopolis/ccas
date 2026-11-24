@@ -7,6 +7,7 @@ import zio.{Clock, ZIO, ZLayer}
 import zio.http.*
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.analysis.apps.{ReportRoot, TestReports}
 import ccas.analysis.apps.recruitment.RecruitmentTestSupport.{apiClubJson, apiClubMembersJson}
 import ccas.analysis.tables.{Club, Tables}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
@@ -41,7 +42,7 @@ object TestHistoryRunClock extends ZIOSpecDefault {
         _ <- ZIO.withClock(Clock.ClockJava(JClock.fixed(pinned, ZoneOffset.UTC))) {
           HistoryApp
             .discover(clubSlug = slug, expectedClubIdOption = None)
-            .provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+            .provideSomeLayer[ProgressDisplay & PostgresClient & ReportRoot](ZLayer.succeed(client))
         }
         times <- connectZIO {
           sql"SELECT started_at, completed_at FROM history_run WHERE club_id = $clubId"
@@ -50,6 +51,7 @@ object TestHistoryRunClock extends ZIOSpecDefault {
       } yield assertTrue(times == List((pinned, Some(pinned))))
     }
   ).provideShared(
+    TestReports.root,
     FreshSchemaLayer(schema = "test_history_run_clock", onInit = Tables.ensureTables),
     ZLayer.succeed(ProgressDisplay.make(enabled = false))
   ) @@ TestAspect.withLiveClock

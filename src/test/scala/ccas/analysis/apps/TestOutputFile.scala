@@ -7,18 +7,19 @@ import java.util.Comparator
 import scala.jdk.CollectionConverters.*
 import scala.util.Using
 
-import com.typesafe.config.ConfigFactory
-import zio.{LogLevel, UIO, ZIO}
+import zio.{LogLevel, UIO, ZIO, ZLayer}
 import zio.test.{assertTrue, Spec, TestAspect, TestClock, ZIOSpecDefault, ZTestLogger}
 
 import ccas.api.misc.subtypes.ClubSlug
 
-/** Reports go under the test config's `output.directory`. Each test clears its own club's directory first, since the
-  * reports of earlier runs stay there.
+/** Reports go under a [[ReportRoot]] this suite chooses, given relative as an operator may give one. Each test clears
+  * its own club's directory first, since the reports of earlier runs stay there.
   */
 object TestOutputFile extends ZIOSpecDefault {
 
-  private val root: Path = Paths.get(ConfigFactory.load().getString(OutputFile.Root.configKey)).toAbsolutePath
+  private val configured: Path = Paths.get("target", "test-output-file")
+
+  private val root: Path = configured.toAbsolutePath
 
   private def clear(club: ClubSlug): ZIO[Any, Throwable, Path] =
     ZIO.attemptBlocking {
@@ -44,13 +45,21 @@ object TestOutputFile extends ZIOSpecDefault {
     TestClock.setTimeZone(ZoneOffset.UTC) *> TestClock.setTime(Instant.parse("2026-10-27T20:33:57Z"))
 
   override def spec: Spec[Any, Throwable] = suite("OutputFile")(
-    test("a report lands under the configured output root, as an absolute path") {
+    test("a report goes under the ReportRoot it is given, as an absolute path") {
       val club = ClubSlug("output-file-lands")
       for {
         dir  <- clear(club)
         path <- OutputFile.write("history", club, "report body")
         body <- ZIO.attemptBlocking(Files.readString(path))
       } yield assertTrue(path.isAbsolute, path.getParent == dir, body == "report body")
+    },
+    test("a report root that can't be resolved fails the write that needs it, naming why") {
+      val unresolved = ReportRoot(Left("Cannot resolve output.directory: no home. Set CCAS_OUTPUT_DIR."))
+      for {
+        exit <- OutputFile.write("history", ClubSlug("output-file-unresolved"), "body").provide(
+          ZLayer.succeed(unresolved)
+        ).exit
+      } yield assertTrue(exit.causeOption.flatMap(_.failureOption).exists(_.getMessage.contains("CCAS_OUTPUT_DIR")))
     },
     test("a second report for the same club and app archives the first") {
       val club = ClubSlug("output-file-archives")
@@ -99,6 +108,6 @@ object TestOutputFile extends ZIOSpecDefault {
         warnings.size == 1,
         warnings.exists(w => w.contains(first.toString) && w.contains(s"${dir.resolve("archive")}: File exists"))
       )
-    }.provide(ZTestLogger.default)
-  ) @@ TestAspect.sequential
+    }.provideSome[ReportRoot](ZTestLogger.default)
+  ).provide(ZLayer.succeed(ReportRoot.at(configured))) @@ TestAspect.sequential
 }

@@ -9,6 +9,7 @@ import ccas.analysis.tables.{Club, ManagedClub}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.ServerTables
 import ccas.server.jobs.JobKind
+import ccas.utils.config.Settings
 import ccas.utils.sql.FreshSchemaLayer
 import ccas.utils.sql.PostgresClient.connectZIO
 
@@ -40,7 +41,8 @@ object TestJobScheduleSql extends ZIOSpecDefault {
     testDeleteByClubLeavesOtherClubs,
     testDeleteByClubLeavesGlobalRows
   ).provideShared(
-    FreshSchemaLayer(schema = "test_job_schedule", onInit = ServerTables.ensureTables)
+    FreshSchemaLayer(schema = "test_job_schedule", onInit = ServerTables.ensureTables),
+    Settings.live
   ) @@ TestAspect.sequential
 
   private object Times {

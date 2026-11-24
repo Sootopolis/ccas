@@ -2,7 +2,7 @@ package ccas.cli
 
 import java.nio.file.{Path, Paths}
 
-import zio.{Cause, Console, Duration, ExitCode, IO, Scope, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Cause, Console, Duration, ExitCode, IO, Scope, Task, UIO, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 import zio.cli.{CliApp, CliError, HelpDoc}
 
 import ccas.cli.config.CliConfig
@@ -10,6 +10,8 @@ import ccas.cli.serve.{Detach, HealthProbe, ServerList, ServerStatus, ServerStop
 import ccas.info.BuildInfo
 import ccas.server.{BootGuard, CcasServer}
 import ccas.server.config.ServerEnvOverlay
+import ccas.utils.config.Settings
+import ccas.utils.errors.safeMessage
 
 /** Single entry point for the `ccas` binary.
   *
@@ -100,23 +102,32 @@ object Main extends ZIOAppDefault {
       Dispatcher.dispatch(wiring)(other, cfg.currentClubOption, defaultServer)
   }
 
-  // Detached serve: apply the ccas.env overlay first, so a file-only SERVER_PORT reaches the port this parent JVM
-  // resolves (it picks the pid file, the log and the readiness probe), then the foreground's mandatory-config precheck.
-  // The detached child re-runs the overlay in its own JVM.
+  // Detached serve: the settings come from `serverSettings`, so a file-only SERVER_PORT reaches the port this parent
+  // JVM resolves (it picks the pid file, the log and the readiness probe), then the foreground's mandatory-config
+  // precheck. The detached child applies the file again in its own JVM.
   private def detachServe(
     wiring: CliWiring,
     cfg: CliConfig,
     readyTimeoutSeconds: Option[Int]
   ): URIO[ZIOAppArgs, ExitCode] =
-    applyServerEnv(wiring.serverEnvFile) *> ZIO.suspendSucceed {
-      (missingServeEnv, Detach.resolveDeadline(readyTimeoutSeconds, cfg.readyTimeoutSeconds)) match {
-        case (Some(msg), _) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
-        // A non-positive deadline is a usage error (exit 2), from the flag or the config file alike — not a failed boot.
-        case (None, Left(msg)) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
-        case (None, Right(deadline)) =>
-          val logDir = cfg.logDir.fold(wiring.stateDir.resolve("logs"))(Paths.get(_))
-          onServerPort(HealthProbe.resolvePort)(port => Detach.run(logDir, wiring.stateDir, port, deadline))
-      }
+    serverSettings(wiring.serverEnvFile).foldZIO(
+      error => Console.printLineError(s"error: ${error.safeMessage}").orDie.as(ExitCode(2)),
+      detachWith(wiring, cfg, readyTimeoutSeconds, _)
+    )
+
+  private def detachWith(
+    wiring: CliWiring,
+    cfg: CliConfig,
+    readyTimeoutSeconds: Option[Int],
+    settings: Settings
+  ): UIO[ExitCode] =
+    (missingServeEnv, Detach.resolveDeadline(readyTimeoutSeconds, cfg.readyTimeoutSeconds)) match {
+      case (Some(msg), _) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
+      // A non-positive deadline is a usage error (exit 2), from the flag or the config file alike — not a failed boot.
+      case (None, Left(msg)) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
+      case (None, Right(deadline)) =>
+        val logDir = cfg.logDir.fold(wiring.stateDir.resolve("logs"))(Paths.get(_))
+        onServerPort(HealthProbe.portIn(settings))(Detach.run(logDir, wiring.stateDir, _, settings, deadline))
     }
 
   /** `server status`: the port picks both the probe and the pid file. Unlike `serve`, no mandatory-config precheck —
@@ -140,12 +151,16 @@ object Main extends ZIOAppDefault {
   private[cli] def applyServerEnv(file: Path): UIO[Unit] =
     ServerEnvOverlay(file).unit.catchAll(message => Console.printLineError(s"warning: $message").orDie)
 
-  /** The port `server status`, `down` and `list` act on: `--port` as given, else this shell's, with the ccas.env
-    * overlay applied first so a file-only `SERVER_PORT` counts. With `--port`, `envFile` isn't read: these commands
-    * consult it for the port alone.
+  /** This shell's server settings, loaded once `file` has been applied, so a value set only there counts. `server
+    * status`, `down`, `list` and `up --detach`'s parent take theirs from here; `server up` from `withServerEnv`.
+    */
+  private[cli] def serverSettings(file: Path): Task[Settings] = applyServerEnv(file) *> Settings.load
+
+  /** The port `server status`, `down` and `list` act on: `--port` as given, else this shell's [[serverSettings]]'.
+    * With `--port`, `envFile` isn't read: these commands consult it for the port alone.
     */
   private[cli] def serverPort(portOption: Option[Int], envFile: Path): IO[String, Int] =
-    portOption.fold(applyServerEnv(envFile) *> HealthProbe.resolvePort)(ZIO.succeed(_))
+    portOption.fold(serverSettings(envFile).mapError(_.safeMessage).flatMap(HealthProbe.portIn))(ZIO.succeed(_))
 
   /** An unreadable port is a usage error, never the default's: the port picks which server's pid file is used (#326). */
   private def onServerPort(port: IO[String, Int])(withPort: Int => UIO[ExitCode]): UIO[ExitCode] =
@@ -159,7 +174,7 @@ object Main extends ZIOAppDefault {
       .withServerEnv(Right(envFile)) {
         ZIO.suspendSucceed {
           missingServeEnv match {
-            // Known missing config → a one-line message, not the raw ConfigException stack from ConfigFactory.load.
+            // Known missing config → a one-line message, not the failure of the layer that would have read it.
             case Some(msg) => Console.printLineError(s"error: $msg").orDie.as(ExitCode(2))
             case None      => ZIO.scoped(CcasServer.serve).as(ExitCode.success)
           }
@@ -178,8 +193,8 @@ object Main extends ZIOAppDefault {
     }
 
   // Mandatory server config resolves from the process env OR the ccas.env overlay (applied as system properties by
-  // `ServerEnvOverlay` before this runs). Surface the first missing piece as a clean message instead of letting
-  // `ConfigFactory.load` throw an UnresolvedSubstitution stack.
+  // `ServerEnvOverlay` before this runs). Surface the first missing piece as a clean message instead of the failure
+  // of the layer that reads it.
   private def missingServeEnv: Option[String] = {
     def unset(name: String): Boolean =
       sys.env.get(name).orElse(Option(System.getProperty(name))).forall(_.trim.isEmpty)

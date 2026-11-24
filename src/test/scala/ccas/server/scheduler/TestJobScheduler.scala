@@ -11,9 +11,7 @@ import ccas.analysis.tables.{Club, RunTrigger}
 import ccas.analysis.tables.subtypes.JobRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.server.ServerTables
-import ccas.server.jobs.{JobKind, JobLogs, JobRun, JobRunner}
-import ccas.utils.ProgressDisplay
-import ccas.utils.client.ChessComClient
+import ccas.server.jobs.{JobEffect, JobKind, JobLogs, JobRun, JobRunner}
 import ccas.utils.errors.ConflictException
 import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
 
@@ -76,7 +74,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+      effect: JobEffect
     ): RIO[PostgresClient, JobRunId] =
       submissions.update(_ + 1).as(JobRunId.generate())
 
@@ -96,7 +94,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+      effect: JobEffect
     ): RIO[PostgresClient, JobRunId] =
       captured.update(params :: _).as(JobRunId.generate())
 
@@ -116,7 +114,7 @@ object TestJobScheduler extends ZIOSpecDefault {
       clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+      effect: JobEffect
     ): RIO[PostgresClient, JobRunId] =
       submitted.update(clubIdOption :: _).as(JobRunId.generate())
 
@@ -344,7 +342,7 @@ object TestJobScheduler extends ZIOSpecDefault {
           clubIdOption: Option[ClubId],
           params: Option[String],
           trigger: RunTrigger,
-          effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+          effect: JobEffect
         ): RIO[PostgresClient, JobRunId] =
           callCount.update(_ + 1) *> ZIO.fail(new RuntimeException("boom"))
 
@@ -395,7 +393,7 @@ object TestJobScheduler extends ZIOSpecDefault {
             clubIdOption: Option[ClubId],
             params: Option[String],
             trigger: RunTrigger,
-            effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+            effect: JobEffect
           ): RIO[PostgresClient, JobRunId] =
             submitted.update(clubIdOption :: _) *>
               ZIO.when(clubIdOption.contains(failClubId))(ZIO.fail(new RuntimeException("boom"))).as(
@@ -466,7 +464,7 @@ object TestJobScheduler extends ZIOSpecDefault {
             clubIdOption: Option[ClubId],
             params: Option[String],
             trigger: RunTrigger,
-            effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+            effect: JobEffect
           ): RIO[PostgresClient, JobRunId] =
             callCount.update(_ + 1) *> ZIO.fail(ConflictException(s"A $kind job is already running"))
 

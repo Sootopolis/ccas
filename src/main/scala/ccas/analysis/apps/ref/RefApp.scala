@@ -7,10 +7,11 @@ import zio.{Clock, ExitCode, Ref, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import RefUtils.*
 
-import ccas.analysis.apps.OutputFile
+import ccas.analysis.apps.{OutputFile, ReportRoot}
 import ccas.analysis.tables.{ClubRefSkip, PlayerRefSkip, PlayerTournamentRef, SkipCount, Tables}
 import ccas.utils.{display, ApiConcurrency, ProgressDisplay}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
+import ccas.utils.config.Settings
 import ccas.utils.errors.BadRequestException
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.connectZIO
@@ -57,7 +58,9 @@ object RefApp extends ZIOAppDefault {
           ChessComClient.live("ref"),
           HttpClientLayer.live,
           BodyStore.live,
-          PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+          PostgresClient.live(onInit = Tables.ensureTablesOnInit),
+          Settings.live,
+          ReportRoot.live
         )
     }
 

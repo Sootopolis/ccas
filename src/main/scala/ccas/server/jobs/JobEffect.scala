@@ -2,14 +2,14 @@ package ccas.server.jobs
 
 import zio.RIO
 
-import ccas.analysis.apps.NamedClub
+import ccas.analysis.apps.{NamedClub, ReportRoot}
 import ccas.analysis.tables.subtypes.JobRunId
 import ccas.utils.ProgressDisplay
 import ccas.utils.client.ChessComClient
 import ccas.utils.sql.PostgresClient
 
 /** The services every job runs with. */
-type JobEnv = ProgressDisplay & ChessComClient & PostgresClient
+type JobEnv = ProgressDisplay & ChessComClient & PostgresClient & ReportRoot
 
 /** What a submitted job runs, given the id of the `job_run` row tracking it. */
 type JobEffect = Option[JobRunId] => RIO[JobEnv, Any]

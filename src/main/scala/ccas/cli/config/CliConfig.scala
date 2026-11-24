@@ -11,7 +11,7 @@ import ccas.utils.errors.safeMessage
   *
   * This is the CLI *client* config and is deliberately separate from the server's classpath `application.conf` (DB,
   * port, Chess.com client) — hence [[load]] reads one specific external file via `fromHoconFileZIO`, never
-  * `fromResourcePath`/`ConfigFactory.load()`, which would merge the server config and cross-wire the two.
+  * `fromResourcePath` or `Settings`' classpath load, which would merge the server config and cross-wire the two.
   *
   * All keys are optional: a missing file (or a file missing a key) yields the corresponding empty value, so the CLI
   * always has working defaults. `default_clubs` feeds shell completions; `api_url` is the resolved server URL's

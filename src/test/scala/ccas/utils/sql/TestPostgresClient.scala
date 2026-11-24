@@ -8,6 +8,8 @@ import org.postgresql.util.PSQLException
 import zio.ZIO
 import zio.test.{assertTrue, Spec, TestAspect, ZIOSpecDefault}
 
+import ccas.utils.config.Settings
+
 object TestPostgresClient extends ZIOSpecDefault {
   override def spec: Spec[Any, Throwable] = suite("TestPostgresClient")(
     suite("DB-backed")(
@@ -17,7 +19,7 @@ object TestPostgresClient extends ZIOSpecDefault {
       testSchemaOverride,
       testPoolClosesOnScopeExit,
       testInvalidSchemaRejected,
-      testLiveBuildsWithoutSchema,
+      testMakeBuildsWithoutSchema,
       testConfiguredAddressIsLiveAddress
     ).provideShared(
       FreshSchemaLayer("test_dsl")
@@ -26,8 +28,40 @@ object TestPostgresClient extends ZIOSpecDefault {
     testResolveSchema,
     testNormalizeJdbcUrl,
     testDatabaseAddress,
-    testExportedDatabaseUrlIgnored
+    testExportedDatabaseUrlIgnored,
+    testUrlIgnoresDbPort,
+    testDataSourcePort
   ) @@ TestAspect.sequential
+
+  // `.env.example` ships `DB_PORT=` to fill in, and a URL never uses it, so it mustn't stop one from loading.
+  private def testUrlIgnoresDbPort = test("a database given by URL loads and resolves whatever DB_PORT holds") {
+    def withPort(port: String) =
+      Settings.from(
+        ConfigFactory
+          .parseString(
+            s"""database { url = "postgresql://ccas@db.example:5432/ccas", dataSource.portNumber = "$port" }"""
+          )
+          .withFallback(ConfigFactory.load())
+      )
+    for {
+      blank <- withPort("").section[DatabaseConfig]("database")
+      word  <- withPort("abc").section[DatabaseConfig]("database")
+    } yield assertTrue(PostgresClient.resolveConnection(blank).isRight, PostgresClient.resolveConnection(word).isRight)
+  }
+
+  private def testDataSourcePort = test("without a URL, a blank DB_PORT reads as unset and a word as not a number") {
+    for {
+      config <- TestDatabases.configured
+    } yield {
+      def withPort(port: String) =
+        PostgresClient.resolveConnection(config.copy(dataSource = config.dataSource.copy(portNumber = Some(port))))
+      assertTrue(
+        withPort(" ").left.exists(_.contains("(DB_PORT) is not set")),
+        withPort("abc").left.exists(_.contains("(DB_PORT) is not a number")),
+        withPort("5432").isRight
+      )
+    }
+  }
 
   // pgjdbc ignores a parameter it does not know, so a misspelt rename would pass every string test and protect nothing.
   // Without TLS, pgjdbc refuses `channelBinding=require` whichever way the server asks to authenticate (trust, md5,
@@ -51,42 +85,39 @@ object TestPostgresClient extends ZIOSpecDefault {
     }
 
   // A shell that exports DATABASE_URL — the `wip` worktree's direnv does — must not redirect the suite. Merges the
-  // classpath `application.conf` files the way `ConfigFactory.load()` does, with a stand-in for the exported variable.
+  // classpath `application.conf` files the way `ConfigFactory.load()` does, with a stand-in for the exported variable,
+  // and reads the section as every pool does.
   private def testExportedDatabaseUrlIgnored = test("an exported DATABASE_URL does not reach the test config") {
     val exported = ConfigFactory.parseString("""DATABASE_URL = "jdbc:postgresql://elsewhere:5432/production"""")
     val resolved = ConfigFactory
       .parseResources("application.conf")
       .withFallback(exported)
       .resolve(ConfigResolveOptions.defaults().setUseSystemEnvironment(false))
-    assertTrue(!resolved.hasPath("database.url"), resolved.getString("database.dataSource.databaseName") == "ccas_test")
+    for {
+      database <- Settings.from(resolved).section[DatabaseConfig]("database")
+    } yield assertTrue(database.url.isEmpty, database.dataSource.databaseName.contains("ccas_test"))
   }
 
-  // Pure resolveSchema cases — no DB / PostgresClient service needed. Builds inline dataSource configs to cover the
-  // #92 regression: an absent `currentSchema` key must yield None (no ConfigException), not crash.
+  // Pure resolveSchema cases — no DB / PostgresClient service needed. A blank `DB_SCHEMA` reaches here as a present
+  // value, so it must read as no schema (#92).
   private def testResolveSchema = suite("resolveSchema")(
-    test("present key resolves") {
-      val cfg = ConfigFactory.parseString("currentSchema = public")
-      assertTrue(PostgresClient.resolveSchema(None, cfg).contains("public"))
+    test("a configured schema resolves") {
+      assertTrue(PostgresClient.resolveSchema(None, Some("public")).contains("public"))
     },
-    test("absent key resolves to None without throwing") {
-      val cfg = ConfigFactory.parseString("user = ccas")
-      assertTrue(PostgresClient.resolveSchema(None, cfg).isEmpty)
+    test("no configured schema resolves to None") {
+      assertTrue(PostgresClient.resolveSchema(None, None).isEmpty)
     },
     test("empty value resolves to None") {
-      val cfg = ConfigFactory.parseString("currentSchema = \"\"")
-      assertTrue(PostgresClient.resolveSchema(None, cfg).isEmpty)
+      assertTrue(PostgresClient.resolveSchema(None, Some("")).isEmpty)
     },
     test("whitespace value resolves to None") {
-      val cfg = ConfigFactory.parseString("currentSchema = \"   \"")
-      assertTrue(PostgresClient.resolveSchema(None, cfg).isEmpty)
+      assertTrue(PostgresClient.resolveSchema(None, Some("   ")).isEmpty)
     },
-    test("explicit schema wins over absent key") {
-      val cfg = ConfigFactory.parseString("user = ccas")
-      assertTrue(PostgresClient.resolveSchema(Some("override"), cfg).contains("override"))
+    test("explicit schema wins over none configured") {
+      assertTrue(PostgresClient.resolveSchema(Some("override"), None).contains("override"))
     },
-    test("explicit schema wins over present key") {
-      val cfg = ConfigFactory.parseString("currentSchema = public")
-      assertTrue(PostgresClient.resolveSchema(Some("override"), cfg).contains("override"))
+    test("explicit schema wins over a configured one") {
+      assertTrue(PostgresClient.resolveSchema(Some("override"), Some("public")).contains("override"))
     }
   )
 
@@ -328,7 +359,8 @@ object TestPostgresClient extends ZIOSpecDefault {
   // The premise of the boot prompt: what it resolves before the pool exists is where the pool then connects.
   private def testConfiguredAddressIsLiveAddress = test("the configured address is the one a live client connects to") {
     for {
-      configured <- PostgresClient.configuredAddress
+      config     <- TestDatabases.configured
+      configured <- ZIO.fromEither(PostgresClient.configuredAddress(config)).mapError(new IllegalArgumentException(_))
       live       <- ZIO.serviceWith[PostgresClient](_.addressOption)
     } yield assertTrue(configured.isDefined, configured == live, configured.exists(_.render.endsWith("/ccas_test")))
   }
@@ -389,24 +421,29 @@ object TestPostgresClient extends ZIOSpecDefault {
     for {
       hikariDs <- ZIO.scoped {
         for {
-          xa <- PostgresClient.live(schema = Some("test_dsl_close")).build
+          xa <- (Settings.live >>> PostgresClient.live(schema = Some("test_dsl_close"))).build
           ds = xa.get[PostgresClient].dataSource.asInstanceOf[HikariDataSource]
         } yield ds
       }
     } yield assertTrue(hikariDs.isClosed)
   }
 
-  // #92 e2e: the prod DB_* path with DB_SCHEMA unset — `databaseNoSchema` has no `currentSchema` key — must build the
-  // pool instead of throwing ConfigException$Missing. With no schema set, Hikari leaves getSchema null (PG falls back
-  // to the connection's default search_path). Builds its own layer, so it doesn't use the shared FreshSchemaLayer.
-  private def testLiveBuildsWithoutSchema = test("live builds pool when currentSchema is absent") {
-    ZIO.scoped {
-      for {
-        xa <- PostgresClient.live(prefix = "databaseNoSchema").build
-        hikariDs = xa.get[PostgresClient].dataSource.asInstanceOf[HikariDataSource]
-      } yield assertTrue(hikariDs.getSchema == null)
+  // #92 e2e: the prod DB_* path with DB_SCHEMA unset must build the pool. With no schema set, Hikari leaves getSchema
+  // null (PG falls back to the connection's default search_path). Builds its own pool, not the shared FreshSchemaLayer.
+  private def testMakeBuildsWithoutSchema =
+    test("make builds the pool from the DatabaseConfig it is given, and sets no schema when it names none") {
+      ZIO.scoped {
+        for {
+          config <- TestDatabases.configured
+          client <- PostgresClient.make(
+            config.copy(dataSource = config.dataSource.copy(currentSchema = None)),
+            schema = None,
+            onInit = ZIO.unit
+          )
+          hikariDs = client.dataSource.asInstanceOf[HikariDataSource]
+        } yield assertTrue(hikariDs.getSchema == null, client.maxPoolSizeOption.contains(config.pool.maximumPoolSize))
+      }
     }
-  }
 
   private def testInvalidSchemaRejected = test("invalid schema name is rejected") {
     for {

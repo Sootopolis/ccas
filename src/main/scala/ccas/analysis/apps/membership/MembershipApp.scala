@@ -12,7 +12,8 @@ import ccas.analysis.apps.{
   ClubResolution,
   ClubSlugRenameResolver,
   NamedClub,
-  OutputFile
+  OutputFile,
+  ReportRoot
 }
 import ccas.analysis.apps.membership.MembershipChange.*
 import ccas.analysis.tables.*
@@ -21,6 +22,7 @@ import ccas.api.club.ApiClubMembers
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
 import ccas.utils.{ProgressDisplay, TimeParser}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, NetworkUnavailableException}
+import ccas.utils.config.Settings
 import ccas.utils.errors.{safeMessage, BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -78,7 +80,9 @@ object MembershipApp extends ZIOAppDefault {
           ChessComClient.live(MEMBERSHIP),
           HttpClientLayer.live,
           BodyStore.live,
-          PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+          PostgresClient.live(onInit = Tables.ensureTablesOnInit),
+          Settings.live,
+          ReportRoot.live
         )
     }
 

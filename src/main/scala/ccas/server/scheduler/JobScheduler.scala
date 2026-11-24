@@ -2,7 +2,6 @@ package ccas.server.scheduler
 
 import java.time.Instant
 
-import com.typesafe.config.ConfigFactory
 import zio.{
   durationInt,
   durationLong,
@@ -10,12 +9,12 @@ import zio.{
   Duration,
   Ref,
   RIO,
+  RLayer,
   Schedule,
   Scope,
   Task,
   UIO,
   URIO,
-  URLayer,
   ZEnvironment,
   ZIO,
   ZLayer
@@ -39,6 +38,7 @@ import ccas.server.scheduler.ScheduleParams.{
   StatsOptions
 }
 import ccas.utils.ProgressDisplay
+import ccas.utils.config.Settings
 import ccas.utils.errors.{safeMessage, ConflictException}
 import ccas.utils.sql.PostgresClient
 
@@ -56,20 +56,16 @@ object JobScheduler {
   /** The longest the scheduler goes without reading the schedules, so a write it was not told of is seen in time. */
   private val MaxReadGap: Duration = 6.hours
 
-  val live: URLayer[JobRunner & PostgresClient, JobScheduler] =
+  val live: RLayer[JobRunner & PostgresClient & Settings, JobScheduler] =
     ZLayer {
-      val config = ConfigFactory.load()
-      val pollMinutes =
-        if config.hasPath("scheduler.pollIntervalMinutes")
-        then config.getInt("scheduler.pollIntervalMinutes")
-        else 15 // default poll interval in minutes
       for {
+        config   <- SchedulerConfig.load
         runner   <- ZIO.service[JobRunner]
         pgClient <- ZIO.service[PostgresClient]
         scheduler <- JobSchedulerLive.make(
           runner,
           pgClient,
-          pollInterval = pollMinutes.toLong.minutes,
+          pollInterval = config.pollIntervalMinutes.toLong.minutes,
           maxReadGap = MaxReadGap,
           readSchedules = JobSchedule.selectEnabled
         )

@@ -1,9 +1,10 @@
 package ccas.server
 
-import zio.{UIO, ZIO}
+import zio.{UIO, URIO, ZIO}
 
 import ccas.utils.TerminalQuestion
-import ccas.utils.sql.{DatabaseAddress, PostgresClient}
+import ccas.utils.config.Settings
+import ccas.utils.sql.{DatabaseAddress, DatabaseConfig, PostgresClient}
 
 /** Asks before a boot against a database whose address isn't loopback. A boot's first effects — `ensureTables`, then
   * marking every `Running` job Failed — land before the port binds, so a server started from the wrong shell has done
@@ -19,22 +20,27 @@ object BootGuard {
     */
   case object Refused extends Exception("boot refused before it started")
 
-  /** True when the boot may go ahead: nothing needed asking, or the operator said yes. Reads the same config the
-    * server's pool will, so it must run after the ccas.env overlay.
+  /** True when the boot may go ahead: nothing needed asking, or the operator said yes.
     *
+    * @param database the configuration the server's pool will be built from
     * @param detachedChild this process is a `--detach` child, whose parent already asked
     */
-  def confirmed(detachedChild: Boolean): UIO[Boolean] =
-    PostgresClient.configuredAddress.either.flatMap { resolved =>
-      question(resolved, detachedChild).fold(ZIO.succeed(true))(TerminalQuestion.ask(_).map(_.getOrElse(true)))
-    }
+  def confirmed(database: DatabaseConfig, detachedChild: Boolean): UIO[Boolean] =
+    question(PostgresClient.configuredAddress(database), detachedChild)
+      .fold(ZIO.succeed(true))(TerminalQuestion.ask(_).map(_.getOrElse(true)))
+
+  /** [[confirmed]] on the `database` section of the [[Settings]]. A section that doesn't load asks nothing, as an
+    * address that doesn't resolve doesn't ([[question]]): the pool then fails at its own boot step, which names it.
+    */
+  def confirmedFor(detachedChild: Boolean): URIO[Settings, Boolean] =
+    DatabaseConfig.load.foldZIO(_ => ZIO.succeed(true), confirmed(_, detachedChild))
 
   /** What to ask before booting, if anything: any address but a loopback one asks, an unreadable one included, unless a
     * parent already asked. Pure.
     *
     * @param resolved what [[PostgresClient.configuredAddress]] gave
     */
-  def question(resolved: Either[Throwable, Option[DatabaseAddress]], detachedChild: Boolean): Option[String] =
+  def question(resolved: Either[String, Option[DatabaseAddress]], detachedChild: Boolean): Option[String] =
     resolved match {
       // A config that doesn't resolve fails `PostgresClient.live` before it connects, with its own message.
       case Left(_) => None

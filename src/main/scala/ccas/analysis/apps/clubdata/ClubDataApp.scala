@@ -4,7 +4,14 @@ import java.time.{Duration, Instant}
 
 import zio.{Chunk, Clock, Ref, RIO, Scope, Task, URIO, ZIO, ZIOAppArgs, ZIOAppDefault}
 
-import ccas.analysis.apps.{withClubSlugRenameRecovery, ClubQuery, ClubResolution, ClubSlugRenameResolver, OutputFile}
+import ccas.analysis.apps.{
+  withClubSlugRenameRecovery,
+  ClubQuery,
+  ClubResolution,
+  ClubSlugRenameResolver,
+  OutputFile,
+  ReportRoot
+}
 import ccas.analysis.apps.ClubSlugRenameResolver.ResolvedClub
 import ccas.analysis.apps.ref.RefHelpers
 import ccas.analysis.tables.{Club, ClubAdmin, ClubMatch, ClubMatchRef, ClubName, Player, Tables}
@@ -12,6 +19,7 @@ import ccas.api.club.{ApiClub, ApiClubMatches}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, PlayerId}
 import ccas.utils.{ApiConcurrency, ProgressDisplay}
 import ccas.utils.client.{BodyStore, ChessComClient, HttpClientLayer, ReportedNotFound}
+import ccas.utils.config.Settings
 import ccas.utils.errors.{safeMessage, NotFoundException}
 import ccas.utils.sql.PostgresClient
 
@@ -31,7 +39,9 @@ object ClubDataApp extends ZIOAppDefault {
         ChessComClient.live("clubdata"),
         HttpClientLayer.live,
         BodyStore.live,
-        PostgresClient.live(onInit = Tables.ensureTablesOnInit)
+        PostgresClient.live(onInit = Tables.ensureTablesOnInit),
+        Settings.live,
+        ReportRoot.live
       )
     }
 

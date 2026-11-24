@@ -9,11 +9,13 @@ import zio.*
 import zio.json.EncoderOps
 import zio.stream.{SubscriptionRef, ZStream}
 
+import ccas.analysis.apps.ReportRoot
 import ccas.analysis.tables.{AppSetting, Club, RunTrigger}
 import ccas.analysis.tables.subtypes.JobRunId
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
 import ccas.utils.{AppDir, BarSnapshot, JobLogSink, ProgressDisplay, ProgressSnapshot}
 import ccas.utils.client.ChessComClient
+import ccas.utils.config.Settings
 import ccas.utils.errors.{safeMessage, ConflictException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
@@ -121,12 +123,15 @@ object JobRunner {
   ): ZIO[R, E, A] =
     display.installLogger(ProgressDisplay.sourced(label)(JobLogSink.currentSink.locally(sink)(effect)))
 
-  val live: RLayer[JobEnv, JobRunner] =
+  val live: RLayer[JobEnv & Settings, JobRunner] =
     ZLayer.scoped {
       for {
-        display     <- ZIO.service[ProgressDisplay]
-        client      <- ZIO.service[ChessComClient]
-        pgClient    <- ZIO.service[PostgresClient]
+        display    <- ZIO.service[ProgressDisplay]
+        client     <- ZIO.service[ChessComClient]
+        pgClient   <- ZIO.service[PostgresClient]
+        reportRoot <- ZIO.service[ReportRoot]
+        // Built from these services alone, not taken whole: the layer's own environment holds its Scope too.
+        env = ZEnvironment(display, client, pgClient, reportRoot)
         completions <- Ref.make(Map.empty[JobRunId, Promise[Nothing, Unit]])
         // Per-job progress channels, registered on submit and dropped on completion — the in-memory analog of
         // `completions`, read by `progressStream` to serve `GET /api/jobs/{id}/progress`.
@@ -147,14 +152,13 @@ object JobRunner {
         // and interrupts any still in flight when the layer is released, normally none after `interruptAll`. `forkIn`
         // self-cleans — a job's child scope closes when its fiber exits — so completed jobs don't accumulate.
         layerScope       <- ZIO.scope
-        configuredLogDir <- LogDir.fromConfig
+        configuredLogDir <- ZIO.serviceWithZIO[Settings](LogDir.in)
         logDir           <- prepareLogDir(configuredLogDir)
         now              <- Clock.instant
         _                <- JobRun.markOrphansAsFailed(now).provideEnvironment(ZEnvironment(pgClient))
       } yield new JobRunnerLive(
         display,
-        client,
-        pgClient,
+        env,
         completions,
         jobChannels,
         runningFibers,
@@ -166,8 +170,7 @@ object JobRunner {
 
   private class JobRunnerLive(
     display: ProgressDisplay,
-    client: ChessComClient,
-    pgClient: PostgresClient,
+    env: ZEnvironment[JobEnv],
     completions: Ref[Map[JobRunId, Promise[Nothing, Unit]]],
     jobChannels: Ref[Map[JobRunId, ProgressDisplay.BarChannel]],
     runningFibers: Ref[Map[JobRunId, Promise[Nothing, Fiber.Runtime[Throwable, Unit]]]],
@@ -176,7 +179,6 @@ object JobRunner {
     logDir: Path
   ) extends JobRunner {
 
-    private val env       = ZEnvironment(display, client, pgClient)
     private val transport = new FileTail(logDir, completions, LogTailPollInterval)
 
     override def submit(

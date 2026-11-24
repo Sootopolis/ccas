@@ -11,6 +11,7 @@ import ccas.cli.serve.HealthProbe.Readiness
 import ccas.cli.serve.PidFile.State
 import ccas.cli.serve.ServerList.Row
 import ccas.server.{BootGuard, CcasServer}
+import ccas.utils.config.Settings
 
 /** Deterministic, DB-free unit tests for the `ccas server up --detach` / `status` / `down` / `list` lifecycle. The pure
   * decision logic ([[Detach.reconstruct]], [[Detach.resolveDeadline]], [[Detach.timeoutMessage]],
@@ -850,12 +851,18 @@ object TestServeLifecycle extends ZIOSpecDefault {
     ),
     suite("HealthProbe.portIn")(
       test("a port that isn't 1 to 65535 is an error, never the default port") {
-        def portIn(value: String) = HealthProbe.portIn(ConfigFactory.parseString(s"server.port = $value"))
-        assertTrue(
-          portIn("808l").left.exists(_.contains("server.port")),
-          portIn("0").isLeft,
-          portIn("70000").isLeft,
-          portIn("8081") == Right(8081)
+        def portIn(value: String) =
+          HealthProbe.portIn(Settings.from(ConfigFactory.parseString(s"server.port = $value"))).either
+        for {
+          typo     <- portIn("808l")
+          zero     <- portIn("0")
+          tooLarge <- portIn("70000")
+          port     <- portIn("8081")
+        } yield assertTrue(
+          typo.left.exists(_.contains("server.port")),
+          zero.isLeft,
+          tooLarge.isLeft,
+          port == Right(8081)
         )
       }
     ),

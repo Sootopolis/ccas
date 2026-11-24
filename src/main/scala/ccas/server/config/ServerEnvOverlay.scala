@@ -15,9 +15,10 @@ import ccas.utils.errors.safeMessageNaming
   * env var, when present, is left untouched and wins; otherwise the file value fills in over the compiled default.
   *
   * `ConfigFactory.invalidateCaches()` is called (only if at least one property was set) so the system-properties layer
-  * is re-read by the next `ConfigFactory.load()`. MUST run before the first `ConfigFactory.load()` in the JVM — applied
-  * once per process, by `Main` (every `server` subcommand) or by `CcasServer.run` (the standalone `ccas-server`).
-  * Idempotent (the only-if-absent guard makes a second call a no-op).
+  * is re-read by the next load. Applied once per process, before the [[ccas.utils.config.Settings]] are loaded, by the
+  * only two ways the server and the CLI's server commands get them: `CcasServer.withServerEnv` (the server itself,
+  * `ccas server up` included) and `Main.serverSettings` (every other `server` subcommand). `ServerTables` and the app
+  * mains don't apply it. Idempotent (the only-if-absent guard makes a second call a no-op).
   */
 object ServerEnvOverlay {
 

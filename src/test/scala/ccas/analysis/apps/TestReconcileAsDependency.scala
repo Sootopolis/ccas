@@ -41,7 +41,8 @@ object TestReconcileAsDependency extends ZIOSpecDefault {
     }
   ).provideShared(
     FreshSchemaLayer(schema = "test_reconcile_as_dependency", onInit = Tables.ensureTables),
-    ZLayer.succeed(ProgressDisplay.make(enabled = false))
+    ZLayer.succeed(ProgressDisplay.make(enabled = false)),
+    TestReports.root
   ) @@ TestAspect.withLiveClock @@ TestAspect.sequential
 
   private val emptyMatchesJson = """{"finished": [], "in_progress": [], "registered": []}"""
@@ -55,8 +56,8 @@ object TestReconcileAsDependency extends ZIOSpecDefault {
 
   /** Runs `effect` against a Chess.com where `clubId` has an empty roster and no matches. */
   private def withClient[A](clubId: ClubId)(
-    effect: ZIO[ProgressDisplay & ChessComClient & PostgresClient, Throwable, A]
-  ): RIO[ProgressDisplay & PostgresClient & BodyStore, A] = {
+    effect: ZIO[ProgressDisplay & ChessComClient & PostgresClient & ReportRoot, Throwable, A]
+  ): RIO[ProgressDisplay & PostgresClient & BodyStore & ReportRoot, A] = {
     val routes: Routes[Any, Response] = Routes(
       Method.GET / "pub" / "club" / string("slug") / "members" -> handler { (_: String, _: Request) =>
         Response.json(apiClubMembersJson(Nil))
@@ -69,7 +70,7 @@ object TestReconcileAsDependency extends ZIOSpecDefault {
       }
     )
     TestChessComClientSupport.fakeClient(routes).flatMap { client =>
-      effect.provideSomeLayer[ProgressDisplay & PostgresClient](ZLayer.succeed(client))
+      effect.provideSomeLayer[ProgressDisplay & PostgresClient & ReportRoot](ZLayer.succeed(client))
     }
   }
 }

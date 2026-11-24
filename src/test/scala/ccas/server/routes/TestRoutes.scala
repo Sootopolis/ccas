@@ -21,10 +21,9 @@ import ccas.server.jobs.*
 import ccas.server.routes.HealthRoutes.ReadyResponse
 import ccas.server.routes.JobRoutes.{ClubJobResult, ConfirmResult, InvitedUsernames, JobResult}
 import ccas.server.scheduler.{JobSchedule, JobScheduler, ScheduleSeed}
-import ccas.utils.ProgressDisplay
 import ccas.utils.client.{ChessComClient, HttpStatusException, TestChessComClientSupport}
 import ccas.utils.errors.{ConflictException, ErrorResponse}
-import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDbCleanup}
+import ccas.utils.sql.{FreshSchemaLayer, PostgresClient, TestDatabases, TestDbCleanup}
 
 object TestRoutes extends ZIOSpecDefault {
 
@@ -64,7 +63,7 @@ object TestRoutes extends ZIOSpecDefault {
       clubIdOption: Option[ClubId],
       params: Option[String],
       trigger: RunTrigger,
-      effect: Option[JobRunId] => RIO[ProgressDisplay & ChessComClient & PostgresClient, Any]
+      effect: JobEffect
     ): RIO[PostgresClient, JobRunId] =
       nextAction.get.flatMap {
         case Action.Succeed =>
@@ -199,7 +198,7 @@ object TestRoutes extends ZIOSpecDefault {
         !body.contains("alice"),
         !body.contains("hunter2")
       )
-    }.provideSomeLayer[Scope](PostgresClient.live(prefix = "databaseUnreachable"))
+    }.provideSomeLayer[Scope](TestDatabases.unreachablePool(onInit = ZIO.unit))
 
   // ==========================================================================
   // Suite: JobRoutes

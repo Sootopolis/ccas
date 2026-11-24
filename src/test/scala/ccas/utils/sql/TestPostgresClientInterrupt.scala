@@ -26,21 +26,21 @@ object TestPostgresClientInterrupt extends ZIOSpecDefault {
   override def spec: Spec[TestEnvironment & Scope, Any] = suite("PostgresClient interruptibility (#193, #304)")(
     test("interrupting a connect blocked in getConnection completes promptly") {
       val entered = new CountDownLatch(1)
-      val client  = PostgresClient.fromDataSource(new BlockingDataSource(entered))
+      val client  = TestDatabases.over(new BlockingDataSource(entered))
       for {
         result <- interruptInCheckout(entered, client.connect(1))
       } yield assertTrue(result.exists(_.isInterruptedOnly))
     },
     test("interrupting a transact blocked in getConnection completes promptly") {
       val entered = new CountDownLatch(1)
-      val client  = PostgresClient.fromDataSource(new BlockingDataSource(entered))
+      val client  = TestDatabases.over(new BlockingDataSource(entered))
       for {
         result <- interruptInCheckout(entered, client.transact(1))
       } yield assertTrue(result.exists(_.isInterruptedOnly))
     },
     test("interrupting a withTransaction blocked in getConnection completes promptly") {
       val entered = new CountDownLatch(1)
-      val client  = PostgresClient.fromDataSource(new BlockingDataSource(entered))
+      val client  = TestDatabases.over(new BlockingDataSource(entered))
       for {
         result <- interruptInCheckout(entered, client.withTransaction(ZIO.unit))
       } yield assertTrue(result.exists(_.isInterruptedOnly))
@@ -48,7 +48,7 @@ object TestPostgresClientInterrupt extends ZIOSpecDefault {
     test("withTransaction closes a connection handed over just as the interrupt lands") {
       val entered = new CountDownLatch(1)
       val closed  = new AtomicBoolean(false)
-      val client  = PostgresClient.fromDataSource(new HandOverOnInterruptDataSource(entered, closeRecording(closed)))
+      val client  = TestDatabases.over(new HandOverOnInterruptDataSource(entered, closeRecording(closed)))
       for {
         result <- interruptInCheckout(entered, client.withTransaction(ZIO.unit))
       } yield assertTrue(

@@ -3,17 +3,16 @@ package ccas.utils.client
 import java.time.{Instant, ZoneOffset}
 import java.util.concurrent.TimeUnit
 
-import com.typesafe.config.{Config, ConfigFactory}
 import zio.*
 import zio.config.derivation.{kebabCase, name}
 import zio.config.magnolia.DeriveConfig
-import zio.config.typesafe.TypesafeConfigProvider
 import zio.http.*
 import zio.http.Method.GET
 import zio.json.JsonDecoder
 
 import ccas.info.BuildInfo
 import ccas.utils.{HttpDate, ProgressBar, ProgressDisplay}
+import ccas.utils.config.Settings
 import ccas.utils.errors.safeMessage
 import ccas.utils.json.JsonDecodingException
 import ccas.utils.sql.PostgresClient
@@ -30,8 +29,8 @@ import ccas.utils.sql.PostgresClient
   *
   * Rationale: `docs/adr/0012-gate-based-adaptive-throttle.md` (throttle),
   * `docs/adr/0006-pacing-ema-measures-the-http-exchange-only.md` (what the EMA measures),
-  * `docs/adr/0007-response-caching-in-postgres.md` (caching). Configured from `application.conf` under
-  * `chess-com-client` by [[ChessComClient.live]].
+  * `docs/adr/0007-response-caching-in-postgres.md` (caching). Configured from the `chess-com-client` section of
+  * [[Settings]] by [[ChessComClient.live]].
   */
 final class ChessComClient(
   client: Client,
@@ -51,6 +50,9 @@ final class ChessComClient(
     * steady state. Exposed for callers that size their fiber pools relative to the gate (e.g. `ApiConcurrency`).
     */
   def maxPermits: Int = config.maxPermits.toInt
+
+  /** The most connections the pool this client writes through opens, when known: `ApiConcurrency` caps fan-out by it. */
+  def dbPoolSizeOption: Option[Int] = pgClient.maxPoolSizeOption
 
   /** Pins the client-stats session window to the current instant and stops the periodic flush fiber. Call once the
     * last API request has completed but before any human pause (e.g. a CLI confirmation prompt) so the persisted
@@ -940,13 +942,12 @@ object ChessComClient {
     given DeriveConfig[ChessComClientConfig] = DeriveConfig.derived
   }
 
-  /** Loads `chess-com-client` from `config`, refusing a blank contact email here rather than at config load — see the
+  /** Loads `chess-com-client` from `settings`, refusing a blank contact email here rather than at config load — see the
     * key's comment in `application.conf`.
     */
-  private[ccas] def loadConfig(config: Config): Task[ChessComClientConfig] =
-    TypesafeConfigProvider
-      .fromTypesafeConfig(config, enableCommaSeparatedValueAsList = true)
-      .load(summon[DeriveConfig[ChessComClientConfig]].desc.nested("chess-com-client"))
+  private[ccas] def loadConfig(settings: Settings): Task[ChessComClientConfig] =
+    settings
+      .section[ChessComClientConfig]("chess-com-client")
       .filterOrFail(_.contactEmail.trim.nonEmpty)(
         IllegalArgumentException("CCAS_CONTACT_EMAIL is not set; Chess.com asks API clients for a contact")
       )
@@ -958,10 +959,10 @@ object ChessComClient {
       Header.AcceptEncoding.GZip()
     )
 
-  def live(appLabel: String): RLayer[Client & PostgresClient & ProgressDisplay & BodyStore, ChessComClient] =
+  def live(appLabel: String): RLayer[Settings & Client & PostgresClient & ProgressDisplay & BodyStore, ChessComClient] =
     ZLayer.scoped {
       for {
-        rawConfig      <- loadConfig(ConfigFactory.load())
+        rawConfig      <- ZIO.serviceWithZIO[Settings](loadConfig)
         throttleConfig <- ZIO.attempt(rawConfig.toThrottleConfig)
         statsFlushInterval = rawConfig.statsFlushInterval
         _ <- ZIO.attempt {

@@ -5,6 +5,7 @@ import java.nio.file.Paths
 import zio.{RIO, TaskLayer, ULayer, ZIO, ZLayer}
 
 import ccas.utils.client.{BodyStore, FsBodyStore}
+import ccas.utils.config.Settings
 
 object FreshSchemaLayer {
   private val schemaNamePattern = "^[a-z_][a-z0-9_]*$".r
@@ -26,7 +27,7 @@ object FreshSchemaLayer {
     */
   def apply(
     schema: String,
-    onInit: RIO[PostgresClient & BodyStore, Unit] = ZIO.unit
+    onInit: RIO[PostgresClient & BodyStore & Settings, Unit] = ZIO.unit
   ): TaskLayer[PostgresClient & BodyStore] = {
     val bodyStore: ULayer[BodyStore] =
       ZLayer.succeed[BodyStore](new FsBodyStore(Paths.get("target", "test-bodies", schema)))
@@ -48,9 +49,9 @@ object FreshSchemaLayer {
           } yield ()
         }
     }
-    PostgresClient.live(
+    (Settings.live >>> PostgresClient.live(
       schema = Some(schema),
-      onInit = (resetSchema *> onInit).provideSomeLayer[PostgresClient](bodyStore)
-    ) ++ bodyStore
+      onInit = (resetSchema *> onInit).provideSomeLayer[PostgresClient & Settings](bodyStore)
+    )) ++ bodyStore
   }
 }

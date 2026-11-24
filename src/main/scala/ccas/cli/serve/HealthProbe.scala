@@ -4,13 +4,11 @@ import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.time.{Duration => JDuration}
 
-import scala.util.Try
-
-import com.typesafe.config.{Config, ConfigFactory}
-import zio.{IO, UIO, ZIO}
+import zio.{Config, IO, UIO, ZIO}
 import zio.json.DecoderOps
 
 import ccas.server.routes.HealthRoutes.ReadyResponse
+import ccas.utils.config.Settings
 import ccas.utils.errors.safeMessage
 
 /** Shared loopback health-probe used by [[ServerStatus]] and [[ServerList]] (to report running/ready), [[Detach]] (to
@@ -47,18 +45,15 @@ object HealthProbe {
   // One reusable client (thread-safe, designed for reuse) rather than one per probe; `status` makes two probes.
   private val client = HttpClient.newBuilder().connectTimeout(ConnectTimeout).build()
 
-  /** The server's bound port from `server.port`. Relies on the caller having applied the ccas.env overlay first so a
-    * file-only `SERVER_PORT` is honoured. A value that isn't a port fails rather than falling back to the default,
-    * since the port picks which server's pid file `down` signals (#326).
+  /** The server's bound port from `server.port` in `settings`, which the caller loads once it has applied the ccas.env
+    * overlay, so a file-only `SERVER_PORT` is honoured. A value that isn't a port fails rather than falling back to the
+    * default, since the port picks which server's pid file `down` signals (#326).
     */
-  def resolvePort: IO[String, Int] =
-    ZIO.attemptBlocking(ConfigFactory.load()).mapError(_.safeMessage).flatMap(config => ZIO.fromEither(portIn(config)))
-
-  /** `server.port` from `config`, or why it isn't a port. Pure. */
-  private[serve] def portIn(config: Config): Either[String, Int] =
-    Try(config.getInt("server.port")).toEither.left
-      .map(e => s"cannot read server.port (SERVER_PORT): ${e.safeMessage}")
-      .filterOrElse(isPort, "server.port (SERVER_PORT) must be a port from 1 to 65535")
+  def portIn(settings: Settings): IO[String, Int] =
+    settings
+      .read("server.port", Config.int)
+      .mapError(e => s"cannot read server.port (SERVER_PORT): ${e.safeMessage}")
+      .filterOrFail(isPort)("server.port (SERVER_PORT) must be a port from 1 to 65535")
 
   /** A TCP port a server can bind: `SERVER_PORT`, `--port` and a pid file's name are all held to it. */
   def isPort(n: Int): Boolean = n >= 1 && n <= 65535
