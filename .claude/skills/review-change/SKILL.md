@@ -11,6 +11,8 @@ The diff is where a review starts, not where it ends. The defects this review ex
 
 `printenv CLAUDE_EFFORT`, for the report. `git status`, then `git merge-base origin/main HEAD` and `git diff <that commit>`, plus the untracked files, which a diff never shows: `git ls-files --others --exclude-standard`. Diffing against `origin/main` itself would show anything merged since the branch was cut as reversed in this change. Read the issue with its comments, and the agreed plan: the change is checked against what was promised, not only against itself.
 
+When the change touches code, not only prose, run the built-in `/simplify` now, on trial (#544), and let it finish: it edits the tree, so the steps below read what it leaves.
+
 ## 2. Map the blast radius
 
 For every symbol, setting, column, JSON field, CLI option and behaviour the change touches, find what depends on it. Search; don't reason from memory.
@@ -36,7 +38,7 @@ Start the bug hunt with the built-in `/code-review`, at an effort level scaled t
 - claims: every statement the change makes about how the code behaves, in prose or comments, checked against the code rather than memory; absolutes (every, never, only, always) first, since false claims cluster there
 - inconsistencies: names, behaviour or prose that disagree with the code around them
 - duplications and redundancies, in tests as much as in main code
-- inefficiencies: extra queries, extra round trips to Chess.com, work repeated per row
+- inefficiencies `/simplify` cannot know of: extra queries, extra round trips to Chess.com, work repeated per row
 - test coverage: every test the plan named exists, every behaviour change has a test, and each new test is shown to fail when the code it guards is broken, on the final code, after every fix: list the faults in a JSON file and run `python3 scripts/inject-faults.py <file>` (its docstring has the format). It runs each test unbroken first, applies one fault at a time with `-Werror` off and restores the file; a fault that does not compile proves nothing, so rewrite it. Where the change replaces old behaviour, one fault puts the old behaviour back: a test that only fails on some other break can still pass on the regression it is named for (#509's `fiberCap` test, whose fixture gave the old and new pool the same cap). Read each new test against its name: the assertions check what the name promises, the effect under test actually runs, and the case that must not happen is covered. Close a gap with a unit test, refactoring production code if that is what makes it reachable, never with a manual check.
 - operator-facing output: report lines, logs and errors the change adds read in the operator's terms, not the schema's or the code's, and appear once per path. Where the output has snapshots under `src/test/resources/snapshot/`, read each changed file whole, not just its diff, and give any new section or line a case in its fixture. Where an interactive command's output changes, write out the whole session it produces, the CLI's own lines and the server log it streams together, and read it start to finish: #487's second criteria block passed every snapshot
 - documentation and comments up to date and to `docs/documentation-standard.md`; `python3 scripts/check-docs.py` covers the mechanical half
@@ -57,7 +59,7 @@ Open with three lines: what the operator will see differ; the state (suite green
 - judgement calls and questions, each in plain terms with a recommendation
 - the before-shipping check (CLAUDE.md, Workflow, step 4): open questions, follow-ups worth an issue, and anything the plan promised that has not landed
 - the change as it now stands: what changed and where, then a table of the plan's promises (each change, test and doc it named), each with where it landed or why it departed, departures the review itself made included. #509's review missed two unlanded promises that only a second reviewer found
-- what was found and fixed, one line each
+- what was found and fixed, one line each, `/simplify`'s fixes included
 - the level this review ran at; recommend changing the session's level only when more building follows in this session (CLAUDE.md, Workflow, Effort)
 - for a large change, an offer of a second review by a fresh agent that sees only the diff, the issue and the plan, since this review shares the author's blind spots. Recommend it when the change reaches an area Workflow step 1 names, or concurrency; otherwise recommend against.
 
@@ -67,8 +69,8 @@ Under a **Reference** heading, last:
 - for each new test, the fault injected into the code it guards and the failure that followed, so the user can trust a test by its name
 - for a bug fix, the change that introduced the bug and, if `/review-change` reviewed it (merged from #319 on), the `escape` label added to the issue
 - the few places worth the user's own reading, as `file:line`
-- a draft commit message, to `/ship`'s rules for one (step 1), so the user has read it before shipping
+- a draft commit message, to `/land`'s rules for one (step 1), so the user has read it before shipping
 
-End with one `AskUserQuestion` call: the report's questions, and a last one for the next step, offering "Ship now" (recommended when nothing blocks), the second review where offered, and "Hold". "Ship now" is the go-ahead for `/ship` (CLAUDE.md, Git).
+End with one `AskUserQuestion` call: the report's questions, and a last one for the next step, offering "Land now" (recommended when nothing blocks), the second review where offered, and "Hold". "Land now" is the go-ahead for `/land` (CLAUDE.md, Git).
 
-Leave the changes uncommitted (CLAUDE.md, Git), unless the answer is "Ship now", which starts `/ship`.
+Leave the changes uncommitted (CLAUDE.md, Git), unless the answer is "Land now", which starts `/land`.
