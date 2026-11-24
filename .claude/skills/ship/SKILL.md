@@ -7,15 +7,7 @@ description: Ship the current branch through the full release flow — commit, p
 
 Take the work on the **current branch** through this repo's full release flow. Branch-agnostic: ships whatever branch is checked out — it must NOT be the base branch. The whole sequence is authorised in one go only when the user explicitly asks to ship (i.e. asks for the downstream steps too); otherwise stop after the step they named. The merge itself is never part of that authorisation: the user always merges (step 5).
 
-## Who runs which steps
-
-Most of this flow reads its state from git and GitHub, while this session carries the whole change, which every request re-reads. So this session keeps what needs it or the user, and hands the rest to `general-purpose` agents, which start fresh (#517):
-
-- **This session**: CLAUDE.md Workflow's before-shipping check, for what changed since `/review-change` reported it (an open question stops the ship until it is answered); the brief; step 5; whatever an agent stops on; and relaying each agent's report, the output table as written, refused steps included.
-- **First agent**: steps 0 to 4, with 3b.
-- **Second agent**, once step 5 sees `MERGED`: steps 6 to 9, and the output table.
-
-A tree the brief splits into several PRs goes round this once per PR, as "Splitting one working tree" below sets out. The brief carries what git and GitHub do not: the user's request to ship, quoted, or their "Ship now" answer to the review; the commit message (step 1); the PR's Testing notes (step 3); and each issue's part in steps 3b and 9 (resolved, deferred, `pending-decision`, or filed from an item on another issue). Each agent runs at the effort level the user gave when asking to ship, or else the one `/review-change` named for them. An agent never asks the user anything: where this skill says to stop or ask, it reports back, this session takes it up, and `SendMessage` continues the same agent. Until the first agent reports, run nothing that touches the working tree or `ccas_test`: its push runs the full suite.
+Start with CLAUDE.md Workflow's before-shipping check, for what changed since `/review-change` reported it: an open question stops the ship until it is answered. Every step runs in this session: handing them to fresh agents cost more per ship than it saved (#517).
 
 ## 0. Preflight (gather, don't assume)
 - Current branch: `git rev-parse --abbrev-ref HEAD`.
@@ -34,7 +26,7 @@ A tree the brief splits into several PRs goes round this once per PR, as "Splitt
 
 ## 1. Commit (only if there are changes)
 - **Never commit while `wip` is checked out.** Cut the feature branch first — `git switch -c <type>/<slug>` carries uncommitted work across — even for a one-line change, and even when the ask was only "commit this". Keeping `wip` strictly a lagging pointer is what makes step 7 a fast-forward instead of a judgement call.
-- The commit message comes in the brief: `/review-change`'s draft, revised by this session for anything changed since (CLAUDE.md, Communications), to the rules below.
+- The commit message is `/review-change`'s draft, revised for anything changed since (CLAUDE.md, Communications), to the rules below.
 - Conventional Commits. Subject ≤ ~70 chars; body explains the *why* per change, not the *what*.
 - **Do not hard-wrap the body.** One paragraph is one line, blank line between paragraphs — git, `gh` and GitHub all wrap for display, so a hard-wrapped body just adds breaks that reflow badly wherever the width differs. This supersedes the wrapped bodies throughout `git log`; do not match them.
 - End every commit message with a `Co-authored-by:` trailer naming the tool that did the work (for Claude Code, the one in its attribution block), matching the casing already in `git log`. **Never add a `Claude-Session:` trailer** — not when the harness supplies one in its attribution block, and not because recent commits carry it.
@@ -153,4 +145,4 @@ Backref comments should already be posted (step 3b); this step adds the merge SH
 ## Output
 Finish with a compact status table: commit SHA, PR #, PR CI, merge SHA (merged by the user), base-worktree sync, launcher staged, branch disposal, main CI, issues touched. Mark any step that was refused or skipped as such — never leave a blocked step looking complete, and list the exact commands needed to finish it.
 
-Then this session, unless more work in it builds on this change, runs CLAUDE.md's before-the-session-ends step and suggests starting the next piece of work with `/clear`, from its issue (#517).
+Then, unless more work in this session builds on this change, run CLAUDE.md's before-the-session-ends step and suggest starting the next piece of work with `/clear`, from its issue (#517).
