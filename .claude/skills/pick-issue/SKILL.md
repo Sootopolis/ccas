@@ -36,7 +36,7 @@ Two to four sentences each:
 - what it costs today — the reason it is worth doing at all
 - the fix in one sentence, **plus its hidden cost** where there is one: a schema change needs a hand-written `ALTER` against every existing database, a CLI tree change needs `completions/ccas.bash` regenerated, some areas need an ADR read first
 - **plan first, or straight in**: straight in only when the fix is one obvious change, with no design choice and none of the areas CLAUDE.md's Workflow names
-- **effort**: the one level its plan, build and review call for (CLAUDE.md, Workflow, Effort)
+- **effort**: the level its plan calls for, and the build's where that is lower (CLAUDE.md, Workflow, Effort)
 
 Mention a label only where it changes the work: `pending-decision` means the deliverable is the user's call, not code.
 
