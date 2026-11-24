@@ -27,8 +27,7 @@ import ccas.utils.sql.PostgresClient
   * context deduplicates: `docs/architecture.md`, under "Applications" → "`HistoryApp` run modes".
   *
   *   - '''CLI:''' `HistoryApp <club-slug> [club-slug ...] [--full] [--include-finished] [--refresh [hours]]`
-  *   - '''API:''' `POST /api/jobs/history` with
-  *     `{"clubSlugs": ["..."], "full": true/false, "includeFinished": true/false, "refreshMinHours": 24}`
+  *   - '''API:''' `POST /api/jobs/history`, whose options are `JobOptions.HistoryOptions`.
   */
 object HistoryApp extends ZIOAppDefault {
   private val help =

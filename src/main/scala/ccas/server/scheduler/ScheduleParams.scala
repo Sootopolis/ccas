@@ -1,96 +1,10 @@
 package ccas.server.scheduler
 
-import java.time.Instant
-
 import zio.{Task, ZIO}
-import zio.json.{DeriveJsonCodec, JsonCodec}
+import zio.json.JsonCodec
 
-import ccas.api.misc.subtypes.ClubSlug
-import ccas.utils.TimeParser
-
-/** Typed per-`JobKind` options decoded from a schedule's free-text `params` column so scheduled runs can
-  * carry the same tunable knobs an ad-hoc HTTP submission (`JobRoutes`) can. Each DTO mirrors the
-  * corresponding `*Request` type minus the club *target* (a schedule's club comes from `schedule.clubIdOption`,
-  * not the params JSON). Every field is optional; an absent (or blank) `params` decodes to the kind's
-  * all-`None` `Default`, which threads into the app call as today's hardcoded defaults — so existing
-  * param-less schedules are unchanged.
-  */
+/** Reads a schedule's free-text `params` column as its kind's options (`JobOptions`). */
 object ScheduleParams {
-
-  final case class ClubDataOptions(minAgeHours: Option[Int])
-  object ClubDataOptions {
-    given JsonCodec[ClubDataOptions] = DeriveJsonCodec.gen
-    val Default: ClubDataOptions     = ClubDataOptions(None)
-  }
-
-  final case class RecruitmentOptions(
-    alias: Option[String],
-    target: Option[Int],
-    cumulative: Option[Boolean],
-    sourceClubs: Option[List[ClubSlug]],
-    timeLimitMinutes: Option[Int],
-    explore: Option[Boolean]
-  )
-  object RecruitmentOptions {
-    given JsonCodec[RecruitmentOptions] = DeriveJsonCodec.gen
-    val Default: RecruitmentOptions     = RecruitmentOptions(None, None, None, None, None, None)
-  }
-
-  final case class MembershipOptions(trustUsernames: Option[Boolean])
-  object MembershipOptions {
-    given JsonCodec[MembershipOptions] = DeriveJsonCodec.gen
-    val Default: MembershipOptions     = MembershipOptions(None)
-  }
-
-  final case class HistoryOptions(
-    full: Option[Boolean],
-    includeFinished: Option[Boolean],
-    refresh: Option[Boolean],
-    refreshMinHours: Option[Int]
-  ) {
-
-    /** Coalesce the `refresh` flag and `refreshMinHours` into `HistoryApp.discover`'s `refreshMinHours`
-      * argument, mirroring `JobRoutes`: an explicit hours value wins, else a bare `refresh: true` means
-      * "always refresh" (0 hours), else `None`.
-      */
-    def effectiveRefresh: Option[Int] = refreshMinHours.orElse(refresh.filter(identity).map(_ => 0))
-  }
-  object HistoryOptions {
-    given JsonCodec[HistoryOptions] = DeriveJsonCodec.gen
-    val Default: HistoryOptions     = HistoryOptions(None, None, None, None)
-  }
-
-  final case class StatsOptions(since: Option[String], until: Option[String], minGames: Option[Int]) {
-
-    /** Resolve the optional stats period, enforcing the same both-or-neither rule as `JobRoutes`. `None` →
-      * all-time member stats; `Some((since, until))` → player-of-period; only one supplied → error.
-      */
-    def period: Task[Option[(Instant, Instant)]] =
-      (since, until) match {
-        case (Some(sinceStr), Some(untilStr)) =>
-          for {
-            start <- TimeParser
-              .parseInstantZIO(sinceStr)
-              .mapError(e => new IllegalArgumentException(s"invalid 'since': $e"))
-            end <- TimeParser
-              .parseInstantZIO(untilStr)
-              .mapError(e => new IllegalArgumentException(s"invalid 'until': $e"))
-          } yield Some((start, end))
-        case (None, None) => ZIO.none
-        case _ =>
-          ZIO.fail(new IllegalArgumentException("both 'since' and 'until' are required for period stats"))
-      }
-  }
-  object StatsOptions {
-    given JsonCodec[StatsOptions] = DeriveJsonCodec.gen
-    val Default: StatsOptions     = StatsOptions(None, None, None)
-  }
-
-  final case class MatchRefOptions(forceSkipped: Option[Boolean], upgradeRefs: Option[Boolean])
-  object MatchRefOptions {
-    given JsonCodec[MatchRefOptions] = DeriveJsonCodec.gen
-    val Default: MatchRefOptions     = MatchRefOptions(None, None)
-  }
 
   /** Decode `params` into `A`, falling back to `default` when absent or blank. A malformed JSON body fails
     * with a descriptive error, which the scheduler's per-schedule guard isolates (the bad row logs and the

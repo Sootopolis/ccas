@@ -183,8 +183,7 @@ object RecruitmentApp extends ZIOAppDefault {
     showHints: Boolean = false,
     trigger: RunTrigger = RunTrigger.Cli,
     // When false (interactive `ccas recruit` on a TTY), the scout leaves found candidates Deferred instead of marking
-    // them Invited — the CLI confirms them afterwards via the confirm endpoint. Defaults true so the standalone app,
-    // the scheduler, and non-interactive API calls keep auto-confirming.
+    // them Invited — the CLI confirms them afterwards via the confirm endpoint. Defaults true for the standalone app.
     autoConfirm: Boolean = true,
     jobRunIdOption: Option[JobRunId] = None,
     // The criteria the operator read and confirmed at the terminal, which the alias must still point at.

@@ -26,7 +26,7 @@ import ccas.utils.sql.PostgresClient
   * }}}
   *
   * ==API==
-  * `POST /api/jobs/stats` with `{"club": {"kind": "by_slug", "slug": "..."}, "since": "...", "until": "..."}`
+  * `POST /api/jobs/stats`, whose options are `JobOptions.StatsOptions`.
   */
 object StatsApp extends ZIOAppDefault {
   private val help =

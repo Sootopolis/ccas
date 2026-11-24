@@ -7,6 +7,7 @@ import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub}
 import ccas.analysis.apps.recruitment.CriteriaSpec
 import ccas.analysis.tables.RecruitmentCriteria
 import ccas.api.misc.subtypes.{ClubId, ClubSlug}
+import ccas.server.jobs.JobOptions.RecruitmentOptions
 import ccas.server.routes.JobRoutes.*
 import ccas.server.routes.ManagedClubRoutes.ManagedClubResponse
 import ccas.server.routes.RecruitmentCriteriaRoutes.CriteriaView
@@ -24,32 +25,61 @@ object TestWireFieldNames extends ZIOSpecDefault {
 
   override def spec: Spec[Any, Nothing] = suite("TestWireFieldNames")(
     test("a club-scoped submit request names its club by id or by slug, and by nothing else") {
-      val byId   = """{"club":{"kind":"by_id","clubId":42},"clubs":[{"kind":"by_id","clubId":42}]}"""
-      val named  = """{"kind":"by_slug","slug":"team-alpha"}"""
-      val bySlug = s"""{"club":$named,"clubs":[$named]}"""
+      val byId                = """{"kind":"by_id","clubId":42}"""
+      val bySlug              = """{"kind":"by_slug","slug":"team-alpha"}"""
+      def one(club: String)   = s"""{"club":$club,"options":{}}"""
+      def batch(club: String) = s"""{"clubs":[$club],"options":{}}"""
       assertTrue(
-        byId.fromJson[RecruitmentRequest].map(_.club) == Right(ClubQuery.ById(ClubId(42L))),
-        byId.fromJson[StatsRequest].map(_.club) == Right(ClubQuery.ById(ClubId(42L))),
-        byId.fromJson[MembershipRequest].map(_.clubs.head) == Right(ClubQuery.ById(ClubId(42L))),
-        byId.fromJson[HistoryRequest].map(_.clubs.head) == Right(ClubQuery.ById(ClubId(42L))),
-        bySlug.fromJson[RecruitmentRequest].map(_.club) == Right(ClubQuery.BySlug(ClubSlug("team-alpha"))),
-        bySlug.fromJson[MembershipRequest].map(_.clubs.head) == Right(ClubQuery.BySlug(ClubSlug("team-alpha"))),
+        one(byId).fromJson[RecruitmentRequest].map(_.club) == Right(ClubQuery.ById(ClubId(42L))),
+        one(byId).fromJson[StatsRequest].map(_.club) == Right(ClubQuery.ById(ClubId(42L))),
+        batch(byId).fromJson[MembershipRequest].map(_.clubs.head) == Right(ClubQuery.ById(ClubId(42L))),
+        batch(byId).fromJson[HistoryRequest].map(_.clubs.head) == Right(ClubQuery.ById(ClubId(42L))),
+        one(bySlug).fromJson[RecruitmentRequest].map(_.club) == Right(ClubQuery.BySlug(ClubSlug("team-alpha"))),
+        batch(bySlug).fromJson[MembershipRequest].map(_.clubs.head) == Right(ClubQuery.BySlug(ClubSlug("team-alpha"))),
         // One field, and it is a sum: a caller cannot name a club twice over. A stray slug alongside an id is not a
         // second answer the server has to weigh, it is a key zio-json drops; the old flat pair no longer decodes.
-        """{"club":{"kind":"by_id","clubId":42,"slug":"other"}}""".fromJson[StatsRequest].map(_.club) ==
+        one("""{"kind":"by_id","clubId":42,"slug":"other"}""").fromJson[StatsRequest].map(_.club) ==
           Right(ClubQuery.ById(ClubId(42L))),
-        """{"clubSlug":"team-alpha","clubId":42}""".fromJson[StatsRequest].isLeft
+        """{"clubSlug":"team-alpha","clubId":42,"options":{}}""".fromJson[StatsRequest].isLeft
       )
+    },
+    test("a job request carries its options under `options`, in the same JSON a schedule's params take") {
+      val params = """{"target":20,"timeLimitMinutes":10,"explore":false}"""
+      val body   = s"""{"club":{"kind":"by_id","clubId":42},"options":$params,"autoConfirm":false}"""
+      assertTrue(
+        body.fromJson[RecruitmentRequest].map(_.options) == params.fromJson[RecruitmentOptions],
+        body.fromJson[RecruitmentRequest].map(_.autoConfirm) == Right(Some(false))
+      )
+    },
+    test("a flat job request from before #265 is refused rather than run on defaults") {
+      val club  = """"club":{"kind":"by_id","clubId":42}"""
+      val clubs = """"clubs":[{"kind":"by_id","clubId":42}]"""
+      assertTrue(
+        // A flat body has no `options`, which every request requires.
+        s"""{$club,"target":20}""".fromJson[RecruitmentRequest].isLeft,
+        s"""{$club,"since":"2026-01-01","until":"2026-02-01"}""".fromJson[StatsRequest].isLeft,
+        s"""{$clubs,"full":true}""".fromJson[HistoryRequest].isLeft,
+        s"""{$clubs}""".fromJson[MembershipRequest].isLeft,
+        // A body half moved over keeps a flat field beside `options`: refused, not run without it.
+        s"""{$club,"options":{},"target":20}""".fromJson[RecruitmentRequest].isLeft,
+        s"""{$club,"options":{},"since":"2026-01-01"}""".fromJson[StatsRequest].isLeft,
+        s"""{$clubs,"options":{},"full":true}""".fromJson[HistoryRequest].isLeft,
+        s"""{$clubs,"options":{},"trustUsernames":false}""".fromJson[MembershipRequest].isLeft
+      )
+    },
+    test("a mistyped key inside a job request's options is refused rather than dropped") {
+      val body = """{"club":{"kind":"by_id","clubId":42},"options":{"targett":3}}"""
+      assertTrue(body.fromJson[RecruitmentRequest].isLeft)
+    },
+    test("an HTTP stats request carries minGames") {
+      val body =
+        """{"club":{"kind":"by_id","clubId":42},"options":{"since":"2026-01-01","until":"2026-02-01","minGames":3}}"""
+      assertTrue(body.fromJson[StatsRequest].map(_.options.minGames) == Right(Some(3)))
     },
     test("a submit request re-encodes its club the way it arrived, the form stored in job_run.params") {
       val request = RecruitmentRequest(
         club = ClubQuery.ById(ClubId(42L)),
-        alias = None,
-        target = None,
-        cumulative = None,
-        sourceClubs = None,
-        timeLimitMinutes = None,
-        explore = None,
+        options = RecruitmentOptions.Default,
         autoConfirm = None,
         confirmedCriteriaId = None
       )

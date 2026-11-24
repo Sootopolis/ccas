@@ -11,6 +11,7 @@ import ccas.analysis.tables.RecruitmentAlias
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.api.player.ApiPlayer
 import ccas.cli.config.{ConfigWriter, CurrentClubRef}
+import ccas.server.jobs.JobOptions.{HistoryOptions, MembershipOptions, RecruitmentOptions, StatsOptions}
 import ccas.server.routes.{ClubRequest, ClubResult, ClubRoutes}
 import ccas.server.routes.BlacklistRoutes.{BlacklistEntryResponse, CreateBlacklistRequest}
 import ccas.server.routes.ClubRoutes.{ClubInfo, ClubsResponse}
@@ -146,7 +147,7 @@ object Dispatcher {
         code <- followEachClub(wiring, follower, targets, membership.detach, currentClubOption) { target =>
           api.postJson[MembershipRequest, List[ClubJobResult]](
             path = "/api/jobs/membership",
-            body = MembershipRequest(NonEmptyChunk.single(target.query), membership.trustUsernames)
+            body = MembershipRequest(NonEmptyChunk.single(target.query), MembershipOptions(membership.trustUsernames))
           )
         }
       } yield code
@@ -158,11 +159,13 @@ object Dispatcher {
           api.postJson[HistoryRequest, List[ClubJobResult]](
             path = "/api/jobs/history",
             body = HistoryRequest(
-              clubs = NonEmptyChunk.single(target.query),
-              full = flag(history.full),
-              includeFinished = flag(history.includeFinished),
-              refresh = flag(history.refresh),
-              refreshMinHours = history.refreshMinHours
+              NonEmptyChunk.single(target.query),
+              HistoryOptions(
+                full = flag(history.full),
+                includeFinished = flag(history.includeFinished),
+                refresh = flag(history.refresh),
+                refreshMinHours = history.refreshMinHours
+              )
             )
           )
         }
@@ -203,7 +206,7 @@ object Dispatcher {
         result <- sendSettlingAmbiguity(target, (r: ClubJobResult) => List(r.resolution), hasTty) { chosen =>
           api.postJson[StatsRequest, ClubJobResult](
             path = "/api/jobs/stats",
-            body = StatsRequest(chosen.query, stats.since, stats.until)
+            body = StatsRequest(chosen.query, StatsOptions(stats.since, stats.until, minGames = None))
           )
         }
         _ <- noteResolutions(wiring, currentClubOption, target, List(jobOutcome(result)))
@@ -832,12 +835,14 @@ object Dispatcher {
           path = "/api/jobs/recruitment",
           body = RecruitmentRequest(
             club = chosen.query,
-            alias = recruit.criteriaNameOption,
-            target = recruit.target,
-            cumulative = flag(recruit.cumulative),
-            sourceClubs = Option.when(recruit.sourceClubs.nonEmpty)(recruit.sourceClubs.map(ClubSlug(_))),
-            timeLimitMinutes = recruit.timeLimitMinutes,
-            explore = recruit.explore,
+            options = RecruitmentOptions(
+              alias = recruit.criteriaNameOption,
+              target = recruit.target,
+              cumulative = flag(recruit.cumulative),
+              sourceClubs = Option.when(recruit.sourceClubs.nonEmpty)(recruit.sourceClubs.map(ClubSlug(_))),
+              timeLimitMinutes = recruit.timeLimitMinutes,
+              explore = recruit.explore
+            ),
             autoConfirm = Option.when(!recruit.stdout)(false),
             confirmedCriteriaId = confirmedCriteriaIdOption
           )

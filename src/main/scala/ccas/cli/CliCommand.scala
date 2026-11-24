@@ -4,6 +4,7 @@ import zio.cli.*
 
 import ccas.analysis.tables.RecruitmentAlias
 import ccas.cli.serve.HealthProbe
+import ccas.server.jobs.JobCaps
 
 /** Parsed `ccas` subcommand. Each variant carries the resolved server URL plus its already-validated arguments, so
   * the dispatcher only translates these into HTTP calls; zio-cli does all parsing and validation.
@@ -359,7 +360,8 @@ object CliCommand {
         (intOpt("target") ?? "Stop once N candidates have been found") ++
         (Options.boolean("cumulative") ?? "Count candidates already found earlier today toward the target") ++
         sourceClubsOpt ++
-        (intOpt("time-limit-minutes") ?? "Stop scouting after roughly N minutes") ++
+        (intOpt("time-limit-minutes") ??
+          s"Stop scouting after roughly N minutes (at most, and by default, ${JobCaps.MaxTimeLimitMinutes})") ++
         exploreOpt ++ clubOpt ++ clubIdOpt ++
         (Options.boolean("stdout") ??
           ("Print invited usernames (bare, newline-separated) to stdout for piping to a clipboard tool " +

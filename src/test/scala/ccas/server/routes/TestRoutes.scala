@@ -242,7 +242,7 @@ object TestRoutes extends ZIOSpecDefault {
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
-        jsonRequest(Method.POST, "/api/jobs/recruitment", s"""{"club":$testClub}""")
+        jsonRequest(Method.POST, "/api/jobs/recruitment", s"""{"club":$testClub,"options":{}}""")
       )
       body <- response.body.asString
       parsed = body.fromJson[ClubJobResult]
@@ -262,7 +262,7 @@ object TestRoutes extends ZIOSpecDefault {
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Conflict)
       response <- JobRoutes.routes.runZIO(
-        jsonRequest(Method.POST, "/api/jobs/recruitment", s"""{"club":$testClub}""")
+        jsonRequest(Method.POST, "/api/jobs/recruitment", s"""{"club":$testClub,"options":{}}""")
       )
       body <- response.body.asString
       parsed = body.fromJson[ClubJobResult]
@@ -279,7 +279,7 @@ object TestRoutes extends ZIOSpecDefault {
       for {
         _ <- unmanageClubs
         response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/recruitment", s"""{"club":$testClub}""")
+          jsonRequest(Method.POST, "/api/jobs/recruitment", s"""{"club":$testClub,"options":{}}""")
         )
         parsed <- response.body.asString.map(_.fromJson[ClubJobResult])
       } yield assertTrue(
@@ -294,7 +294,11 @@ object TestRoutes extends ZIOSpecDefault {
       for {
         _ <- unmanageClubs
         response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubs":[{"kind":"by_slug","slug":"test-club"}]}""")
+          jsonRequest(
+            Method.POST,
+            "/api/jobs/membership",
+            """{"clubs":[{"kind":"by_slug","slug":"test-club"}],"options":{}}"""
+          )
         )
         parsed <- response.body.asString.map(_.fromJson[List[ClubJobResult]])
       } yield assertTrue(
@@ -315,7 +319,11 @@ object TestRoutes extends ZIOSpecDefault {
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
-        jsonRequest(Method.POST, "/api/jobs/membership", """{"clubs":[{"kind":"by_slug","slug":"test-club"}]}""")
+        jsonRequest(
+          Method.POST,
+          "/api/jobs/membership",
+          """{"clubs":[{"kind":"by_slug","slug":"test-club"}],"options":{}}"""
+        )
       )
       body <- response.body.asString
       parsed = body.fromJson[List[ClubJobResult]]
@@ -335,7 +343,7 @@ object TestRoutes extends ZIOSpecDefault {
   private def testMembershipEmptyClubSlugs = test("POST /api/jobs/membership empty clubSlugs") {
     for {
       response <- JobRoutes.routes.runZIO(
-        jsonRequest(Method.POST, "/api/jobs/membership", """{"clubs":[]}""")
+        jsonRequest(Method.POST, "/api/jobs/membership", """{"clubs":[],"options":{}}""")
       )
     } yield assertTrue(response.status == Status.BadRequest)
   }
@@ -349,7 +357,8 @@ object TestRoutes extends ZIOSpecDefault {
         jsonRequest(
           method = Method.POST,
           path = "/api/jobs/membership",
-          body = """{"clubs":[{"kind":"by_slug","slug":"test-club"},{"kind":"by_slug","slug":"other-club"}]}"""
+          body =
+            """{"clubs":[{"kind":"by_slug","slug":"test-club"},{"kind":"by_slug","slug":"other-club"}],"options":{}}"""
         )
       )
       body <- response.body.asString
@@ -376,7 +385,7 @@ object TestRoutes extends ZIOSpecDefault {
         _    <- fake.setNextAction(Action.Succeed)
         // clubId 200 is "test-club"; the slug sent no longer exists, but the id pins the club.
         response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubs":[{"kind":"by_id","clubId":200}]}""")
+          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubs":[{"kind":"by_id","clubId":200}],"options":{}}""")
         )
         body <- response.body.asString
         parsed = body.fromJson[List[ClubJobResult]]
@@ -402,7 +411,8 @@ object TestRoutes extends ZIOSpecDefault {
         jsonRequest(
           method = Method.POST,
           path = "/api/jobs/membership",
-          body = """{"clubs":[{"kind":"by_slug","slug":"test-club"},{"kind":"by_slug","slug":"no-such-club"}]}"""
+          body =
+            """{"clubs":[{"kind":"by_slug","slug":"test-club"},{"kind":"by_slug","slug":"no-such-club"}],"options":{}}"""
         )
       )
       body <- response.body.asString
@@ -436,7 +446,11 @@ object TestRoutes extends ZIOSpecDefault {
         fake <- getFakeRunner
         _    <- fake.setNextAction(Action.Succeed)
         response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/membership", """{"clubs":[{"kind":"by_slug","slug":"route-former"}]}""")
+          jsonRequest(
+            Method.POST,
+            "/api/jobs/membership",
+            """{"clubs":[{"kind":"by_slug","slug":"route-former"}],"options":{}}"""
+          )
         )
         body <- response.body.asString
         parsed = body.fromJson[List[ClubJobResult]]
@@ -458,7 +472,11 @@ object TestRoutes extends ZIOSpecDefault {
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
-        jsonRequest(Method.POST, "/api/jobs/history", """{"clubs":[{"kind":"by_slug","slug":"test-club"}]}""")
+        jsonRequest(
+          Method.POST,
+          "/api/jobs/history",
+          """{"clubs":[{"kind":"by_slug","slug":"test-club"}],"options":{}}"""
+        )
       )
       body <- response.body.asString
       parsed = body.fromJson[List[ClubJobResult]]
@@ -680,7 +698,11 @@ object TestRoutes extends ZIOSpecDefault {
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
-        jsonRequest(Method.POST, "/api/jobs/stats", s"""{"club":$testClub,"since":"not-a-date","until":"also-bad"}""")
+        jsonRequest(
+          Method.POST,
+          "/api/jobs/stats",
+          s"""{"club":$testClub,"options":{"since":"not-a-date","until":"also-bad"}}"""
+        )
       )
     } yield assertTrue(response.status == Status.BadRequest)
   }
@@ -691,7 +713,11 @@ object TestRoutes extends ZIOSpecDefault {
       fake <- getFakeRunner
       _    <- fake.setNextAction(Action.Succeed)
       response <- JobRoutes.routes.runZIO(
-        jsonRequest(Method.POST, "/api/jobs/stats", s"""{"club":$testClub,"since":"2026-01-01T00:00:00Z"}""")
+        jsonRequest(
+          Method.POST,
+          "/api/jobs/stats",
+          s"""{"club":$testClub,"options":{"since":"2026-01-01T00:00:00Z"}}"""
+        )
       )
     } yield assertTrue(response.status == Status.BadRequest)
   }
@@ -704,7 +730,7 @@ object TestRoutes extends ZIOSpecDefault {
         fake <- getFakeRunner
         _    <- fake.setNextAction(Action.Fail(msg))
         response <- JobRoutes.routes.runZIO(
-          jsonRequest(Method.POST, "/api/jobs/recruitment", s"""{"club":$testClub}""")
+          jsonRequest(Method.POST, "/api/jobs/recruitment", s"""{"club":$testClub,"options":{}}""")
         )
         body <- response.body.asString
         logs <- ZTestLogger.logOutput
