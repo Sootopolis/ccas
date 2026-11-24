@@ -46,7 +46,7 @@ Then run the affected suites, or the full suite when the change is wide.
 
 ## 4. Fix, then ask
 
-Fix findings inside the change straight away, then review what the fixes touched: a fix has a blast radius too. When fixes changed production code, run `/code-review` once more over the whole diff. If that pass changes production code again, say so and ask rather than going round again.
+Fix findings inside the change straight away, then review what the fixes touched: a fix has a blast radius too. When a fix for an important finding, `/code-review`'s or your own, changed production logic, run `/code-review` once more over the whole diff; fixes to nits, wording, comments or tests alone don't call for it (#517: four rated second passes found nothing important). If that pass changes production code again, say so and ask rather than going round again.
 
 Ask before acting on anything you are unsure of, any judgement call, and anything that reaches beyond the change, such as a codebase-wide sweep, a refactor of untouched code or an audit. Those are often deferred to an issue.
 
@@ -58,7 +58,7 @@ Open with three lines: what the operator will see differ; the state (suite green
 - the before-shipping check (CLAUDE.md, Workflow, step 4): open questions, follow-ups worth an issue, and anything the plan promised that has not landed
 - the change as it now stands: what changed and where, then a table of the plan's promises (each change, test and doc it named), each with where it landed or why it departed, departures the review itself made included. #509's review missed two unlanded promises that only a second reviewer found
 - what was found and fixed, one line each
-- the level this review ran at, and the one for `/ship`'s agents; recommend changing the session's level only when more building follows in this session (CLAUDE.md, Workflow, Effort)
+- the level this review ran at; recommend changing the session's level only when more building follows in this session (CLAUDE.md, Workflow, Effort)
 - for a large change, an offer of a second review by a fresh agent that sees only the diff, the issue and the plan, since this review shares the author's blind spots. Recommend it when the change reaches an area Workflow step 1 names, or concurrency; otherwise recommend against.
 
 Under a **Reference** heading, last:
