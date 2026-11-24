@@ -1,8 +1,6 @@
 package ccas.server.jobs
 
-/** Shared upper bounds applied to job parameters regardless of submission path (HTTP `JobRoutes` or a
-  * scheduled `JobSchedule`'s params). Kept in one place so the two paths can't drift apart.
-  */
+/** Upper bounds on job options, applied by `JobOptions` whichever way the job was submitted. */
 object JobCaps {
 
   /** Cap on a recruitment run's candidate target — bounds API usage per run. */

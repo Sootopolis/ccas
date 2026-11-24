@@ -1,16 +1,12 @@
 package ccas.server.scheduler
 
-import java.time.Instant
-
-import zio.ZIO
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.api.misc.subtypes.ClubSlug
-import ccas.server.scheduler.ScheduleParams.*
+import ccas.server.jobs.JobOptions.{ClubDataOptions, MembershipOptions, RecruitmentOptions}
 
-/** Unit coverage for decoding a schedule's free-text `params` column into typed per-kind options. This is the
-  * load-bearing test for Feature 2: the `runSchedule` threading that consumes these options is straight-line, so
-  * correctness of the decode + defaults + validation is what matters.
+/** Decoding a schedule's free-text `params` column into its kind's options; what the options mean is
+  * [[ccas.server.jobs.TestJobOptions]].
   */
 object TestScheduleParams extends ZIOSpecDefault {
 
@@ -21,10 +17,7 @@ object TestScheduleParams extends ZIOSpecDefault {
     testClubDataMinAgeDecodes,
     testRecruitmentFullDecode,
     testMalformedJsonFails,
-    testHistoryEffectiveRefresh,
-    testStatsPeriodBothPresent,
-    testStatsPeriodNeitherIsNone,
-    testStatsPeriodOnlyOneFails
+    testUnknownKeyFails
   )
 
   private def testAbsentParamsAreDefault = test("absent params decode to the kind's all-None Default") {
@@ -72,37 +65,9 @@ object TestScheduleParams extends ZIOSpecDefault {
     }
   }
 
-  private def testHistoryEffectiveRefresh =
-    test("History refresh coalesce: hours wins, else bare flag means 0, else None") {
-      val explicitHours = HistoryOptions(None, None, Some(true), Some(5))
-      val bareFlag      = HistoryOptions(None, None, Some(true), None)
-      val neither       = HistoryOptions(None, None, None, None)
-      ZIO.succeed(
-        assertTrue(
-          explicitHours.effectiveRefresh.contains(5),
-          bareFlag.effectiveRefresh.contains(0),
-          neither.effectiveRefresh.isEmpty
-        )
-      )
-    }
-
-  private def testStatsPeriodBothPresent = test("StatsOptions.period parses both since and until into a period") {
-    StatsOptions(Some("2026-01-01"), Some("2026-02-01T00:00:00Z"), None).period.map { period =>
-      assertTrue(
-        period.contains((Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-02-01T00:00:00Z")))
-      )
-    }
-  }
-
-  private def testStatsPeriodNeitherIsNone =
-    test("StatsOptions.period with neither since nor until is None (all-time)") {
-      StatsOptions(None, None, None).period.map { period =>
-        assertTrue(period.isEmpty)
-      }
-    }
-
-  private def testStatsPeriodOnlyOneFails = test("StatsOptions.period with only one of since/until fails") {
-    StatsOptions(Some("2026-01-01"), None, None).period.exit.map { exit =>
+  // A request body pasted whole into params is the likely mistake, now that the two share the options' JSON.
+  private def testUnknownKeyFails = test("params with a key no option has fail to decode rather than run on defaults") {
+    ScheduleParams.decode(Some("""{"options":{"trustUsernames":false}}"""), MembershipOptions.Default).exit.map { exit =>
       assertTrue(exit.isFailure)
     }
   }

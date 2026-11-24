@@ -21,15 +21,9 @@ import zio.{
 }
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution}
-import ccas.analysis.apps.clubdata.ClubDataApp
-import ccas.analysis.apps.history.HistoryApp
-import ccas.analysis.apps.membership.MembershipApp
-import ccas.analysis.apps.recruitment.RecruitmentApp
-import ccas.analysis.apps.ref.RefApp
-import ccas.analysis.apps.stats.StatsApp
-import ccas.analysis.tables.{RecruitmentAlias, RunTrigger}
-import ccas.server.jobs.{ClubJobEffect, JobCaps, JobEffect, JobKind, JobRunner}
-import ccas.server.scheduler.ScheduleParams.{
+import ccas.analysis.tables.RunTrigger
+import ccas.server.jobs.{ClubJobEffect, JobEffect, JobKind, JobRunner}
+import ccas.server.jobs.JobOptions.{
   ClubDataOptions,
   HistoryOptions,
   MatchRefOptions,
@@ -197,67 +191,25 @@ object JobScheduler {
       schedule.kind match {
         case JobKind.Recruitment =>
           ScheduleParams.decode(schedule.params, RecruitmentOptions.Default).map { opts =>
-            clubJob(schedule) { (club, jobRunIdOption) =>
-              RecruitmentApp.recruit(
-                clubSlug = club.slug,
-                expectedClubIdOption = Some(club.clubId),
-                alias = opts.alias.getOrElse(RecruitmentAlias.Default),
-                target = opts.target.map(_ min JobCaps.MaxTarget),
-                cumulative = opts.cumulative.getOrElse(false),
-                sourceClubs = opts.sourceClubs.getOrElse(Nil),
-                timeLimitMinutes = opts.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes).orElse(Some(30)),
-                explore = opts.explore.getOrElse(true),
-                trigger = RunTrigger.Scheduled,
-                jobRunIdOption = jobRunIdOption,
-                confirmedCriteriaIdOption = None
-              )
-            }
+            clubJob(schedule)(opts.effect(RunTrigger.Scheduled, autoConfirm = true, confirmedCriteriaIdOption = None))
           }
         case JobKind.Membership =>
           ScheduleParams.decode(schedule.params, MembershipOptions.Default).map { opts =>
-            clubJob(schedule) { (club, jobRunIdOption) =>
-              MembershipApp.reconcileAndReport(
-                clubSlug = club.slug,
-                expectedClubIdOption = Some(club.clubId),
-                trustUsernames = opts.trustUsernames.getOrElse(true),
-                trigger = RunTrigger.Scheduled,
-                jobRunIdOption = jobRunIdOption
-              )
-            }
+            clubJob(schedule)(opts.effect(RunTrigger.Scheduled))
           }
         case JobKind.MatchRef =>
-          ScheduleParams.decode(schedule.params, MatchRefOptions.Default).map { opts => _ =>
-            RefApp.populate(opts.forceSkipped.getOrElse(false), opts.upgradeRefs.getOrElse(false))
-          }
+          ScheduleParams.decode(schedule.params, MatchRefOptions.Default).map(_.effect)
         case JobKind.History =>
           ScheduleParams.decode(schedule.params, HistoryOptions.Default).map { opts =>
-            clubJob(schedule) { (club, jobRunIdOption) =>
-              HistoryApp.discover(
-                clubSlug = club.slug,
-                expectedClubIdOption = Some(club.clubId),
-                full = opts.full.getOrElse(false),
-                includeFinished = opts.includeFinished.getOrElse(false),
-                refreshMinHours = opts.effectiveRefresh,
-                trigger = RunTrigger.Scheduled,
-                jobRunIdOption = jobRunIdOption
-              )
-            }
+            clubJob(schedule)(opts.effect(RunTrigger.Scheduled))
           }
         case JobKind.Stats =>
           for {
-            opts         <- ScheduleParams.decode(schedule.params, StatsOptions.Default)
-            periodOption <- opts.period
-          } yield clubJob(schedule) { (club, _) =>
-            periodOption match {
-              case Some((since, until)) =>
-                StatsApp.playerOfPeriodAndReport(club.clubId, since, until, opts.minGames.getOrElse(1))
-              case None => StatsApp.memberStatsAndReport(club.clubId)
-            }
-          }
+            opts   <- ScheduleParams.decode(schedule.params, StatsOptions.Default)
+            effect <- opts.effect
+          } yield clubJob(schedule)(effect)
         case JobKind.ClubData =>
-          ScheduleParams.decode(schedule.params, ClubDataOptions.Default).map { opts => _ =>
-            ClubDataApp.refresh(opts.minAgeHours)
-          }
+          ScheduleParams.decode(schedule.params, ClubDataOptions.Default).map(_.effect)
       }
 
     // The schedule's club is resolved when the job starts, not when it is decoded, and by id — so the job runs

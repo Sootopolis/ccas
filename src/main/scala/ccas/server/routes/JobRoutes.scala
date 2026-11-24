@@ -1,34 +1,27 @@
 package ccas.server.routes
 
 import java.nio.charset.StandardCharsets
-import java.time.Instant
 
-import zio.{IO, NonEmptyChunk, RIO, ZIO}
+import zio.{NonEmptyChunk, RIO, ZIO}
 import zio.http.*
-import zio.json.{jsonField, DeriveJsonCodec, EncoderOps, JsonCodec}
+import zio.json.{jsonField, jsonNoExtraFields, DeriveJsonCodec, EncoderOps, JsonCodec}
 import zio.stream.ZStream
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution}
-import ccas.analysis.apps.history.HistoryApp
-import ccas.analysis.apps.membership.MembershipApp
-import ccas.analysis.apps.recruitment.RecruitmentApp
-import ccas.analysis.apps.ref.RefApp
-import ccas.analysis.apps.stats.StatsApp
-import ccas.analysis.tables.{
-  ManagedClub,
-  PlayerName,
-  RecruitmentAlias,
-  RecruitmentCandidate,
-  RecruitmentRun,
-  RunTrigger
-}
+import ccas.analysis.tables.{ManagedClub, PlayerName, RecruitmentCandidate, RecruitmentRun, RunTrigger}
 import ccas.analysis.tables.subtypes.{JobRunId, RecruitmentRunId}
 import ccas.api.misc.subtypes.{ClubId, ClubSlug, Username}
 import ccas.server.jobs.*
+import ccas.server.jobs.JobOptions.{
+  HistoryOptions,
+  MatchRefOptions,
+  MembershipOptions,
+  RecruitmentOptions,
+  StatsOptions
+}
 import ccas.server.routes.RouteHelpers.*
-import ccas.utils.TimeParser
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.{BadRequestException, ConflictException, ErrorResponse, NotFoundException}
+import ccas.utils.errors.{ConflictException, ErrorResponse, NotFoundException}
 import ccas.utils.sql.PostgresClient
 import ccas.utils.sql.PostgresClient.withTransaction
 
@@ -36,22 +29,17 @@ object JobRoutes {
 
   // --- Request types ---
 
-  // Recruitment caps (`JobCaps.MaxTarget` / `JobCaps.MaxTimeLimitMinutes`) are shared with the scheduled-job
-  // path (`ScheduleParams`) so both submission routes apply identical bounds.
-
   // Every club-scoped request names its club as a `ClubQuery` — `{"kind":"by_id","clubId":N}` or
   // `{"kind":"by_slug","slug":"…"}` — so a caller can send the stable id (rename-proof, what the CLI has cached for
   // `current_club`) or a name to look up, and cannot send two answers that disagree (ADR 0016, #254).
+  // Its kind's `options` are the JSON a schedule's params take (`JobOptions`). The requests refuse unknown keys, so a
+  // flat body from before #265 is a 400 rather than a run on defaults.
+  @jsonNoExtraFields
   private[ccas] case class RecruitmentRequest(
     club: ClubQuery,
-    alias: Option[String],
-    target: Option[Int],
-    cumulative: Option[Boolean],
-    sourceClubs: Option[List[ClubSlug]],
-    timeLimitMinutes: Option[Int],
-    explore: Option[Boolean],
+    options: RecruitmentOptions,
     // When Some(false) the scout leaves candidates Deferred for the CLI to confirm; absent/Some(true) auto-confirms
-    // (scheduler, raw API, and non-interactive `ccas recruit`). The interactive CLI sends false.
+    // (raw API, and non-interactive `ccas recruit`). The interactive CLI sends false.
     autoConfirm: Option[Boolean],
     // The criteria the operator read and confirmed (`CriteriaView.criteriaId`): the run refuses any other, and names
     // these in one line instead of logging them again. Absent for everything but an interactive `ccas recruit`.
@@ -63,30 +51,20 @@ object JobRoutes {
 
   // The batch DTOs name each club separately, so a batch can mix ids and names and every element resolves on its own
   // terms. The CLI always submits ONE club per call regardless. See [[RecruitmentRequest]] for the rationale.
-  private[ccas] case class MembershipRequest(
-    clubs: NonEmptyChunk[ClubQuery],
-    trustUsernames: Option[Boolean]
-  )
+  @jsonNoExtraFields
+  private[ccas] case class MembershipRequest(clubs: NonEmptyChunk[ClubQuery], options: MembershipOptions)
   object MembershipRequest {
     given JsonCodec[MembershipRequest] = DeriveJsonCodec.gen
   }
 
-  private[ccas] case class HistoryRequest(
-    clubs: NonEmptyChunk[ClubQuery],
-    full: Option[Boolean],
-    includeFinished: Option[Boolean],
-    refresh: Option[Boolean],
-    refreshMinHours: Option[Int]
-  )
+  @jsonNoExtraFields
+  private[ccas] case class HistoryRequest(clubs: NonEmptyChunk[ClubQuery], options: HistoryOptions)
   object HistoryRequest {
     given JsonCodec[HistoryRequest] = DeriveJsonCodec.gen
   }
 
-  private[ccas] case class StatsRequest(
-    club: ClubQuery,
-    since: Option[String],
-    until: Option[String]
-  )
+  @jsonNoExtraFields
+  private[ccas] case class StatsRequest(club: ClubQuery, options: StatsOptions)
   object StatsRequest {
     given JsonCodec[StatsRequest] = DeriveJsonCodec.gen
   }
@@ -209,37 +187,17 @@ object JobRoutes {
     for {
       body   <- parseJsonBody[RecruitmentRequest](req)
       runner <- ZIO.service[JobRunner]
-      result <- submitClubJob(runner, JobKind.Recruitment, body.club, Some(body.toJson)) { (club, jobRunIdOption) =>
-        RecruitmentApp.recruit(
-          clubSlug = club.slug,
-          expectedClubIdOption = Some(club.clubId),
-          alias = body.alias.getOrElse(RecruitmentAlias.Default),
-          target = body.target.map(_ min JobCaps.MaxTarget),
-          cumulative = body.cumulative.getOrElse(false),
-          sourceClubs = body.sourceClubs.getOrElse(Nil),
-          timeLimitMinutes = body.timeLimitMinutes.map(_ min JobCaps.MaxTimeLimitMinutes),
-          explore = body.explore.getOrElse(true),
-          trigger = RunTrigger.Api,
-          autoConfirm = body.autoConfirm.getOrElse(true),
-          jobRunIdOption = jobRunIdOption,
-          confirmedCriteriaIdOption = body.confirmedCriteriaId
-        )
-      }
+      effect = body.options.effect(RunTrigger.Api, body.autoConfirm.getOrElse(true), body.confirmedCriteriaId)
+      result <- submitClubJob(runner, JobKind.Recruitment, body.club, Some(body.toJson))(effect)
     } yield jsonResponse(Status.Ok, result)
 
   private def submitMembership(req: Request): RIO[JobRunner & ChessComClient & PostgresClient, Response] =
     for {
       body   <- parseJsonBody[MembershipRequest](req)
       runner <- ZIO.service[JobRunner]
-      results <- submitClubJobs(runner, JobKind.Membership, body.clubs, Some(body.toJson)) { (club, jobRunIdOption) =>
-        MembershipApp.reconcileAndReport(
-          clubSlug = club.slug,
-          expectedClubIdOption = Some(club.clubId),
-          trustUsernames = body.trustUsernames.getOrElse(true),
-          trigger = RunTrigger.Api,
-          jobRunIdOption = jobRunIdOption
-        )
-      }
+      results <- submitClubJobs(runner, JobKind.Membership, body.clubs, Some(body.toJson))(
+        body.options.effect(RunTrigger.Api)
+      )
     } yield jsonResponse(Status.Ok, results)
 
   private def submitMatchRef: RIO[JobRunner & PostgresClient, Response] =
@@ -251,7 +209,7 @@ object JobRoutes {
           clubIdOption = None,
           params = None,
           trigger = RunTrigger.Api,
-          effect = _ => RefApp.populate(forceSkipped = false, upgradeRefs = false)
+          effect = MatchRefOptions.Default.effect
         )
       )
     } yield jsonResponse(Status.Ok, JobResult(jobIdOption = submitted.toOption, error = submitted.left.toOption))
@@ -260,44 +218,18 @@ object JobRoutes {
     for {
       body   <- parseJsonBody[HistoryRequest](req)
       runner <- ZIO.service[JobRunner]
-      refreshMinHours = body.refreshMinHours.orElse(body.refresh.filter(identity).map(_ => 0))
-      results <- submitClubJobs(runner, JobKind.History, body.clubs, Some(body.toJson)) { (club, jobRunIdOption) =>
-        HistoryApp.discover(
-          clubSlug = club.slug,
-          expectedClubIdOption = Some(club.clubId),
-          full = body.full.getOrElse(false),
-          includeFinished = body.includeFinished.getOrElse(false),
-          refreshMinHours = refreshMinHours,
-          trigger = RunTrigger.Api,
-          jobRunIdOption = jobRunIdOption
-        )
-      }
+      results <- submitClubJobs(runner, JobKind.History, body.clubs, Some(body.toJson))(
+        body.options.effect(RunTrigger.Api)
+      )
     } yield jsonResponse(Status.Ok, results)
 
   private def submitStats(req: Request): RIO[JobRunner & ChessComClient & PostgresClient, Response] =
     for {
-      body         <- parseJsonBody[StatsRequest](req)
-      runner       <- ZIO.service[JobRunner]
-      periodOption <- statsPeriod(body)
-      result <- submitClubJob(runner, JobKind.Stats, body.club, Some(body.toJson)) { (club, _) =>
-        periodOption match {
-          // minGames=1 mirrors the CLI default; StatsRequest carries no min-games field.
-          case Some((since, until)) => StatsApp.playerOfPeriodAndReport(club.clubId, since, until, 1)
-          case None                 => StatsApp.memberStatsAndReport(club.clubId)
-        }
-      }
+      body   <- parseJsonBody[StatsRequest](req)
+      runner <- ZIO.service[JobRunner]
+      effect <- body.options.effect
+      result <- submitClubJob(runner, JobKind.Stats, body.club, Some(body.toJson))(effect)
     } yield jsonResponse(Status.Ok, result)
-
-  private def statsPeriod(body: StatsRequest): IO[BadRequestException, Option[(Instant, Instant)]] =
-    (body.since, body.until) match {
-      case (Some(sinceString), Some(untilString)) =>
-        for {
-          since <- TimeParser.parseInstantZIO(sinceString).mapError(e => BadRequestException(s"Invalid 'since': $e"))
-          until <- TimeParser.parseInstantZIO(untilString).mapError(e => BadRequestException(s"Invalid 'until': $e"))
-        } yield Some((since, until))
-      case (None, None) => ZIO.none
-      case _            => ZIO.fail(BadRequestException("Both 'since' and 'until' are required for period stats"))
-    }
 
   // --- Job inspection ---
 
