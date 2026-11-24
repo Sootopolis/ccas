@@ -1,9 +1,9 @@
 ---
-name: ship
-description: Ship the current branch through the full release flow — commit, push, open a PR, wait for the user to merge it in the GitHub UI once CI is green, then sync worktrees, re-stage the launcher, watch main CI, and update issues. Use when the user says "ship it", "ship this", "ship the branch", or asks to take the current branch through PR → merge → sync.
+name: land
+description: Land the current branch through the full release flow — commit, push, open a PR, wait for the user to merge it in the GitHub UI once CI is green, then sync worktrees, re-stage the launcher, watch main CI, and update issues. Use when the user says "land it", "ship it", "ship this", "ship the branch", or asks to take the current branch through PR → merge → sync. This repo's flow, not Claude Code's built-in /ship.
 ---
 
-# Ship the current branch
+# Land the current branch
 
 Take the work on the **current branch** through this repo's full release flow. Branch-agnostic: ships whatever branch is checked out — it must NOT be the base branch. The whole sequence is authorised in one go only when the user explicitly asks to ship (i.e. asks for the downstream steps too); otherwise stop after the step they named. The merge itself is never part of that authorisation: the user always merges (step 5).
 

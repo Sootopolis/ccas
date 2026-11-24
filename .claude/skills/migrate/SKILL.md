@@ -49,7 +49,7 @@ Query each database for what the script promised: the new tables, columns and co
 
 ## 7. Re-stage and boot
 
-Re-stage the launcher and boot, as `/ship` step 6b describes. Which schedules fire was settled at step 3.
+Re-stage the launcher and boot, as `/land` step 6b describes. Which schedules fire was settled at step 3.
 
 ## Report
 
