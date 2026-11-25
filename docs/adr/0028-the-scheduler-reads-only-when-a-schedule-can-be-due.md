@@ -1,6 +1,6 @@
 # The scheduler reads its schedules only when one can be due
 
-**Status:** Accepted, 2026-11-10 (#422). Amended by #458.
+**Status:** Accepted, 2026-11-10 (#422). Amended by #458 and #547.
 
 ## Context
 
@@ -13,7 +13,7 @@
 - a write through the server asked it to `recheck`;
 - `MaxReadGap` has passed since its last read.
 
-A due schedule that did not fire, because its job is still running or its submission failed, keeps the next read at the next tick, as before. A failed read retries at the next tick. A row whose trigger or params won't decode can't fire until it is changed, so it is logged at each read but does not hold the next one early; the API stores `params` without decoding them, so such a row can arrive that way.
+A due schedule that did not fire, because its job is still running or its submission failed, keeps the next read at the next tick, as before. A failed read retries at the next tick. A row whose trigger or params won't decode can't fire until it is changed, so it is logged at each read but does not hold the next one early. The API refuses such `params` since #547, but a hand-edited row, or one written before its kind's options changed, can still arrive that way.
 
 **Every server path that writes `job_schedule` asks for a recheck:** the schedule routes, and unmarking a managed club. Boot seeding runs before the scheduler starts. The CLI writes only through the server.
 

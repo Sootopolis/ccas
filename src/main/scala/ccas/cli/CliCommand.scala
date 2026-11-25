@@ -530,7 +530,7 @@ object CliCommand {
         (Options.text("tz").optional ?? "Cron timezone (IANA, e.g. Europe/London; default UTC)") ++
         (Options.text("misfire").optional ?? "Cron misfire policy: skip (default) or catch_up") ++
         (Options.text("club").optional ?? "Club slug the job targets (when the kind needs one)") ++ clubIdOpt ++
-        (Options.text("params").optional ?? "Extra job parameters passed to the run")
+        (Options.text("params").optional ?? "Options as JSON, e.g. '{\"trustUsernames\":false}' (Membership)")
     ).withHelp("Create a scheduled job (interval via --interval-hours, or wall-clock via --cron)")
       .map { case (server, kind, intervalHours, cron, tz, misfire, club, clubIdOption, params) =>
         ScheduleAdd(

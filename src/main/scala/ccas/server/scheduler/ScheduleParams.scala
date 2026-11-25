@@ -3,20 +3,56 @@ package ccas.server.scheduler
 import zio.{Task, ZIO}
 import zio.json.JsonCodec
 
-/** Reads a schedule's free-text `params` column as its kind's options (`JobOptions`). */
+import ccas.analysis.tables.RunTrigger
+import ccas.server.jobs.{ClubJobEffect, JobEffect, JobKind}
+import ccas.server.jobs.JobOptions.{
+  ClubDataOptions,
+  HistoryOptions,
+  MatchRefOptions,
+  MembershipOptions,
+  RecruitmentOptions,
+  StatsOptions
+}
+
+/** Reads a schedule's free-text `params` column as its kind's options (`JobOptions`), and builds the job they
+  * describe.
+  */
 object ScheduleParams {
 
-  /** Decode `params` into `A`, falling back to `default` when absent or blank. A malformed JSON body fails
-    * with a descriptive error, which the scheduler's per-schedule guard isolates (the bad row logs and the
-    * poll loop continues) — and because decode runs before `submit`, `last_run_at` is not advanced.
+  enum ScheduledJob {
+    case ForClub(effect: ClubJobEffect)
+    case Clubless(effect: JobEffect)
+  }
+
+  /** The job a schedule of `kind` runs with these `params`. It fails when the scheduler could never build a run from
+    * them, so the API refuses a write that fails it (#547), and the scheduler builds each run from it.
     */
-  def decode[A](params: Option[String], default: A)(using codec: JsonCodec[A]): Task[A] =
+  def job(kind: JobKind, params: Option[String]): Task[ScheduledJob] =
+    kind match {
+      case JobKind.Recruitment =>
+        decode(params, RecruitmentOptions.Default).map { opts =>
+          ScheduledJob.ForClub(opts.effect(RunTrigger.Scheduled, autoConfirm = true, confirmedCriteriaIdOption = None))
+        }
+      case JobKind.Membership =>
+        decode(params, MembershipOptions.Default).map(opts => ScheduledJob.ForClub(opts.effect(RunTrigger.Scheduled)))
+      case JobKind.MatchRef =>
+        decode(params, MatchRefOptions.Default).map(opts => ScheduledJob.Clubless(opts.effect))
+      case JobKind.History =>
+        decode(params, HistoryOptions.Default).map(opts => ScheduledJob.ForClub(opts.effect(RunTrigger.Scheduled)))
+      case JobKind.Stats =>
+        for {
+          opts   <- decode(params, StatsOptions.Default)
+          effect <- opts.effect
+        } yield ScheduledJob.ForClub(effect)
+      case JobKind.ClubData =>
+        decode(params, ClubDataOptions.Default).map(opts => ScheduledJob.Clubless(opts.effect))
+    }
+
+  /** Decode `params` into `A`, falling back to `default` when absent or blank. */
+  private[scheduler] def decode[A](params: Option[String], default: A)(using codec: JsonCodec[A]): Task[A] =
     params match {
       case None                      => ZIO.succeed(default)
       case Some(s) if s.trim.isEmpty => ZIO.succeed(default)
-      case Some(s) =>
-        ZIO
-          .fromEither(codec.decoder.decodeJson(s))
-          .mapError(err => new IllegalArgumentException(s"invalid params JSON: $err"))
+      case Some(s) => ZIO.fromEither(codec.decoder.decodeJson(s)).mapError(IllegalArgumentException(_))
     }
 }
