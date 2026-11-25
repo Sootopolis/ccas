@@ -30,9 +30,10 @@ object ScheduleParams {
   def job(kind: JobKind, params: Option[String]): Task[ScheduledJob] =
     kind match {
       case JobKind.Recruitment =>
-        decode(params, RecruitmentOptions.Default).map { opts =>
-          ScheduledJob.ForClub(opts.effect(RunTrigger.Scheduled, autoConfirm = true, confirmedCriteriaIdOption = None))
-        }
+        for {
+          opts   <- decode(params, RecruitmentOptions.Default)
+          effect <- opts.effect(RunTrigger.Scheduled, autoConfirm = true, confirmedCriteriaIdOption = None)
+        } yield ScheduledJob.ForClub(effect)
       case JobKind.Membership =>
         decode(params, MembershipOptions.Default).map(opts => ScheduledJob.ForClub(opts.effect(RunTrigger.Scheduled)))
       case JobKind.MatchRef =>

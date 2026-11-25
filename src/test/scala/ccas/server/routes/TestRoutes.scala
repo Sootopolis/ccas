@@ -230,6 +230,7 @@ object TestRoutes extends ZIOSpecDefault {
     testGetJobProgressReturns404,
     testStatsWithInvalidDateReturns400,
     testStatsWithPartialDatesReturns400,
+    testRecruitmentWithZeroTargetReturns400,
     testRecruitmentInvitedAndFound,
     testRecruitmentConfirmFlipsDeferred,
     testRecruitmentReport,
@@ -721,6 +722,17 @@ object TestRoutes extends ZIOSpecDefault {
       )
     } yield assertTrue(response.status == Status.BadRequest)
   }
+
+  private def testRecruitmentWithZeroTargetReturns400 =
+    test("POST /api/jobs/recruitment with a target of 0 returns 400") {
+      for {
+        _ <- ensureManagedClubs
+        response <- JobRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/jobs/recruitment", s"""{"club":$testClub,"options":{"target":0}}""")
+        )
+        body <- response.body.asString
+      } yield assertTrue(response.status == Status.BadRequest, body.contains("'target' must be at least 1 (got 0)"))
+    }
 
   private def testUnhandledErrorReturns500AndLogsCause =
     test("unhandled non-user-facing error returns generic 500 and logs cause under the route") {

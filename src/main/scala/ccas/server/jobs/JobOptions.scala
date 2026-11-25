@@ -39,10 +39,18 @@ object JobOptions {
       timeLimitMinutes.fold(JobCaps.MaxTimeLimitMinutes)(_ min JobCaps.MaxTimeLimitMinutes)
 
     /** `autoConfirm` and `confirmedCriteriaIdOption` are the interactive CLI's, so they are not options a schedule
-      * could set: a scheduled run auto-confirms, with no criteria read at a terminal.
+      * could set: a scheduled run auto-confirms, with no criteria read at a terminal. A target or time limit below 1 is
+      * refused here, before a job is submitted: either would end the run at once as if it had finished (#548).
       */
-    def effect(trigger: RunTrigger, autoConfirm: Boolean, confirmedCriteriaIdOption: Option[Long]): ClubJobEffect =
-      (club, jobRunIdOption) =>
+    def effect(
+      trigger: RunTrigger,
+      autoConfirm: Boolean,
+      confirmedCriteriaIdOption: Option[Long]
+    ): IO[BadRequestException, ClubJobEffect] =
+      for {
+        _ <- atLeastOne("target", target)
+        _ <- atLeastOne("timeLimitMinutes", timeLimitMinutes)
+      } yield (club, jobRunIdOption) =>
         RecruitmentApp.recruit(
           clubSlug = club.slug,
           expectedClubIdOption = Some(club.clubId),
@@ -123,6 +131,7 @@ object JobOptions {
           for {
             start <- TimeParser.parseInstantZIO(sinceString).mapError(e => BadRequestException(s"Invalid 'since': $e"))
             end   <- TimeParser.parseInstantZIO(untilString).mapError(e => BadRequestException(s"Invalid 'until': $e"))
+            _     <- StatsApp.checkPeriod(start, end)
           } yield Some((start, end))
         case (None, None) => ZIO.none
         case _            => ZIO.fail(BadRequestException("Both 'since' and 'until' are required for period stats"))
@@ -162,4 +171,9 @@ object JobOptions {
     given JsonCodec[ClubDataOptions] = DeriveJsonCodec.gen
     val Default: ClubDataOptions     = ClubDataOptions(None)
   }
+
+  private def atLeastOne(key: String, valueOption: Option[Int]): IO[BadRequestException, Unit] =
+    ZIO.foreachDiscard(valueOption.filter(_ < 1)) { value =>
+      ZIO.fail(BadRequestException(s"'$key' must be at least 1 (got $value)"))
+    }
 }

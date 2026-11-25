@@ -430,6 +430,24 @@ object TestCliParser extends ZIOSpecDefault {
         wrapping
       )
     },
+    // 0 would end the run at once as if it had finished (#548). The negative goes in `--name=value` form, which the
+    // `=1` case shows parses, since a bare "-3" could fail as an unknown flag without reaching the bound.
+    test("recruit --target and --time-limit-minutes take 1 or more, and 0 or less is rejected") {
+      for {
+        lowest         <- parsed("recruit", "--target=1", "--time-limit-minutes", "1")
+        zeroTarget     <- parse("recruit", "--target", "0").exit.map(_.isFailure)
+        negativeTarget <- parse("recruit", "--target=-3").exit.map(_.isFailure)
+        zeroLimit      <- parse("recruit", "--time-limit-minutes", "0").exit.map(_.isFailure)
+      } yield assertTrue(
+        lowest.exists {
+          case recruit: CliCommand.Recruit => recruit.target.contains(1) && recruit.timeLimitMinutes.contains(1)
+          case _                           => false
+        },
+        zeroTarget,
+        negativeTarget,
+        zeroLimit
+      )
+    },
     test("top-level serve and stop no longer parse (grouped under server)") {
       for {
         serveFailed <- parse("serve").exit.map(_.isFailure)
