@@ -987,7 +987,9 @@ object TestRoutes extends ZIOSpecDefault {
     testPostSchedulesUndecodableParamsReturns400,
     testPostSchedulesUnrunnableStatsParamsReturns400,
     testPostSchedulesChecksParamsBeforeResolving,
-    testPutScheduleUndecodableParamsReturns400
+    testPutScheduleUndecodableParamsReturns400,
+    testPostSchedulesClubKindWithoutClubReturns400,
+    testPostSchedulesClublessKindWithClubReturns400
   )
 
   // `params` is JSON carried in a JSON string, so it is encoded as one.
@@ -1006,41 +1008,52 @@ object TestRoutes extends ZIOSpecDefault {
       } yield assertTrue(response.status == Status.Created, all.map(_.params) == List(Some(params)))
     }
 
+  private val formerName = """{"kind":"by_slug","slug":"renamed-from"}"""
+
+  private def postRefused(body: String) =
+    for {
+      _        <- deleteAllSchedules
+      response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/schedules", body))
+      all      <- JobSchedule.selectAll
+    } yield assertTrue(response.status == Status.BadRequest, all.isEmpty)
+
+  // Resolving a former name asks Chess.com who holds it now; the dummy client fails, which the resolver logs. A request
+  // that will be refused must not get that far.
+  private def postRefusedBeforeResolving(body: String) = {
+    val upstreamAsks = ZTestLogger.logOutput.map(_.count(_.message().contains("Upstream check")))
+    for {
+      _       <- ensureRenamedClub
+      before  <- upstreamAsks
+      refused <- postRefused(body)
+      after   <- upstreamAsks
+    } yield refused && assertTrue(after == before)
+  }
+
   // A request body pasted whole into params is the likely mistake; stored, it would never fire (#547).
   private def testPostSchedulesUndecodableParamsReturns400 =
     test("POST /api/schedules refuses params its kind's options can't decode, and stores nothing") {
-      val body = intervalWithParams("Membership", testClub, """{"options":{"trustUsernames":false}}""")
-      for {
-        _        <- deleteAllSchedules
-        response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/schedules", body))
-        all      <- JobSchedule.selectAll
-      } yield assertTrue(response.status == Status.BadRequest, all.isEmpty)
+      postRefused(intervalWithParams("Membership", testClub, """{"options":{"trustUsernames":false}}"""))
     }
 
   private def testPostSchedulesUnrunnableStatsParamsReturns400 =
     test("POST /api/schedules refuses Stats params the scheduler couldn't run: a since without an until") {
-      val body = intervalWithParams("Stats", testClub, """{"since":"2026-01-01T00:00:00Z"}""")
-      for {
-        _        <- deleteAllSchedules
-        response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/schedules", body))
-        all      <- JobSchedule.selectAll
-      } yield assertTrue(response.status == Status.BadRequest, all.isEmpty)
+      postRefused(intervalWithParams("Stats", testClub, """{"since":"2026-01-01T00:00:00Z"}"""))
     }
 
-  // Resolving a former name asks Chess.com who holds it now; the dummy client fails, which the resolver logs. A request
-  // that will be refused must not get that far.
   private def testPostSchedulesChecksParamsBeforeResolving =
     test("POST /api/schedules refuses bad params before it resolves the club, so Chess.com is not asked") {
-      val body         = intervalWithParams("Membership", """{"kind":"by_slug","slug":"renamed-from"}""", "{not-json")
-      val upstreamAsks = ZTestLogger.logOutput.map(_.count(_.message().contains("Upstream check")))
-      for {
-        _        <- deleteAllSchedules
-        _        <- ensureRenamedClub
-        before   <- upstreamAsks
-        response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/schedules", body))
-        after    <- upstreamAsks
-        all      <- JobSchedule.selectAll
-      } yield assertTrue(response.status == Status.BadRequest, after == before, all.isEmpty)
+      postRefusedBeforeResolving(intervalWithParams("Membership", formerName, "{not-json"))
+    }
+
+  // Stored, it would record a failed run at every fire (#551).
+  private def testPostSchedulesClubKindWithoutClubReturns400 =
+    test("POST /api/schedules refuses a club-scoped kind with no club, and stores nothing") {
+      postRefused("""{"kind":"Membership","intervalHours":24}""")
+    }
+
+  private def testPostSchedulesClublessKindWithClubReturns400 =
+    test("POST /api/schedules refuses a clubless kind given a club, before resolving it, and stores nothing") {
+      postRefusedBeforeResolving(s"""{"kind":"ClubData","club":$formerName,"intervalHours":24}""")
     }
 
   private def testPutScheduleUndecodableParamsReturns400 =
