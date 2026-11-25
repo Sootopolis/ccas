@@ -13,6 +13,7 @@ import ccas.api.misc.subtypes.ClubId
 import ccas.server.jobs.JobKind
 import ccas.server.routes.RouteHelpers.*
 import ccas.server.scheduler.{JobSchedule, JobScheduler, MisfirePolicy, ScheduleParams, ScheduleTrigger, TriggerType}
+import ccas.server.scheduler.ScheduleParams.ScheduledJob
 import ccas.utils.client.ChessComClient
 import ccas.utils.errors.{safeMessage, BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
@@ -196,8 +197,22 @@ object ScheduleRoutes {
         } yield UpdateArgs(None, normCron, tz, body.misfire, body.enabled, body.params.map(Some(_)))
     }
 
-  private def checkParams(kind: JobKind, params: Option[String]): IO[BadRequestException, Unit] =
-    ScheduleParams.job(kind, params).unit.mapError(e => BadRequestException(s"invalid $kind params: ${e.safeMessage}"))
+  private def checkParams(kind: JobKind, params: Option[String]): IO[BadRequestException, ScheduledJob] =
+    ScheduleParams.job(kind, params).mapError(e => BadRequestException(s"invalid $kind params: ${e.safeMessage}"))
+
+  // A club-scoped schedule without a club would fail at every fire, and a clubless one would store a club its job
+  // ignores (#551).
+  private def checkClub(
+    kind: JobKind,
+    job: ScheduledJob,
+    clubOption: Option[ClubQuery]
+  ): IO[BadRequestException, Unit] =
+    (job, clubOption) match {
+      case (_: ScheduledJob.ForClub, None) => ZIO.fail(BadRequestException(s"a $kind schedule needs a club"))
+      case (_: ScheduledJob.Clubless, Some(_)) =>
+        ZIO.fail(BadRequestException(s"a $kind schedule takes no club: it covers every club"))
+      case _ => ZIO.unit
+    }
 
   private def persist(schedule: JobSchedule): RIO[JobScheduler & PostgresClient, ScheduleResponse] =
     for {
@@ -219,7 +234,8 @@ object ScheduleRoutes {
         kind             <- ZIO.fromEither(parseJobKind(body.kind)).mapError(BadRequestException(_))
         now              <- Clock.instant
         clubless         <- ZIO.fromEither(buildCreate(kind, body, now)).mapError(BadRequestException(_))
-        _                <- checkParams(kind, body.params)
+        job              <- checkParams(kind, body.params)
+        _                <- checkClub(kind, job, body.clubOption)
         resolutionOption <- ZIO.foreach(body.clubOption)(ClubRequest.resolve)
         scheduleOption <- resolutionOption.map(_.runnable) match {
           case Some(Left(_))     => ZIO.none
