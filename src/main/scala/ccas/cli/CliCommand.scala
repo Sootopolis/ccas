@@ -199,6 +199,20 @@ object CliCommand {
       }
       .optional
 
+  // A count where 0 or less would end the run at once as if it had finished (#548); the server refuses it too, but
+  // only after an interactive run has had the operator confirm its criteria.
+  private def positiveIntOpt(name: String): Options[Option[Int]] =
+    intOpt(name).mapOrFail {
+      case Some(n) if n < 1 =>
+        Left(
+          ValidationError(
+            validationErrorType = ValidationErrorType.InvalidValue,
+            error = HelpDoc.p(s"--$name must be at least 1 (got $n)")
+          )
+        )
+      case valueOption => Right(valueOption)
+    }
+
   // Single-club target. Absent → Dispatcher falls back to the config's `current_club`.
   private val clubOpt: Options[Option[String]] =
     Options.text("club").optional ?? "Club slug (URL name); falls back to the current club (set with 'ccas use-club')"
@@ -357,10 +371,10 @@ object CliCommand {
       options = serverOpt(default) ++
         (Options.text("criteria").optional ??
           s"Which of the club's named criteria to use (default: \"${RecruitmentAlias.Default}\")") ++
-        (intOpt("target") ?? "Stop once N candidates have been found") ++
+        (positiveIntOpt("target") ?? "Stop once N candidates have been found") ++
         (Options.boolean("cumulative") ?? "Count candidates already found earlier today toward the target") ++
         sourceClubsOpt ++
-        (intOpt("time-limit-minutes") ??
+        (positiveIntOpt("time-limit-minutes") ??
           s"Stop scouting after roughly N minutes (at most, and by default, ${JobCaps.MaxTimeLimitMinutes})") ++
         exploreOpt ++ clubOpt ++ clubIdOpt ++
         (Options.boolean("stdout") ??

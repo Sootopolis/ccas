@@ -237,7 +237,7 @@ object TestStatsApp extends ZIOSpecDefault {
         _       <- TestClock.setTime(Times.t2.plus(Duration.ofHours(13)))
         lagged  <- StatsApp.playerOfPeriod(clubId, Times.t0, Times.t2).either
       } yield assertTrue(
-        tooSoon.left.exists(_.getMessage.startsWith("--until must be at least 12 hours before now")),
+        tooSoon.left.exists(_.getMessage.startsWith("'until' must be at least 12 hours before now")),
         lagged.isRight
       )
     }

@@ -3,8 +3,9 @@ package ccas.server.jobs
 import java.time.Instant
 
 import zio.ZIO
-import zio.test.{assertTrue, Spec, ZIOSpecDefault}
+import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
 
+import ccas.analysis.tables.RunTrigger
 import ccas.server.jobs.JobOptions.{HistoryOptions, RecruitmentOptions, StatsOptions}
 
 /** The rules a job's options carry, which an HTTP submission and a schedule share. */
@@ -26,6 +27,25 @@ object TestJobOptions extends ZIOSpecDefault {
           RecruitmentOptions.Default.cappedTarget.isEmpty
         )
       )
+    },
+    test("a recruitment target or time limit below 1 is refused before any job is built") {
+      def refusal(options: RecruitmentOptions) =
+        options.effect(RunTrigger.Api, autoConfirm = true, confirmedCriteriaIdOption = None).flip.map(_.getMessage)
+      for {
+        zeroTarget     <- refusal(RecruitmentOptions.Default.copy(target = Some(0)))
+        negativeTarget <- refusal(RecruitmentOptions.Default.copy(target = Some(-5)))
+        zeroLimit      <- refusal(RecruitmentOptions.Default.copy(timeLimitMinutes = Some(0)))
+      } yield assertTrue(
+        zeroTarget == "'target' must be at least 1 (got 0)",
+        negativeTarget == "'target' must be at least 1 (got -5)",
+        zeroLimit == "'timeLimitMinutes' must be at least 1 (got 0)"
+      )
+    },
+    test("a recruitment target and time limit of 1 are accepted") {
+      RecruitmentOptions.Default
+        .copy(target = Some(1), timeLimitMinutes = Some(1))
+        .effect(RunTrigger.Api, autoConfirm = true, confirmedCriteriaIdOption = None)
+        .as(assertCompletes)
     },
     test("History refresh coalesce: hours wins, else bare flag means 0, else None") {
       val explicitHours = HistoryOptions(None, None, Some(true), Some(5))
@@ -54,6 +74,15 @@ object TestJobOptions extends ZIOSpecDefault {
       } yield assertTrue(
         onlySince.getMessage == "Both 'since' and 'until' are required for period stats",
         badDate.getMessage.startsWith("Invalid 'since'")
+      )
+    },
+    test("a stats period whose since is not before its until is refused before any job is built") {
+      for {
+        empty    <- StatsOptions(Some("2026-02-01"), Some("2026-02-01"), None).effect.flip
+        reversed <- StatsOptions(Some("2026-03-01"), Some("2026-02-01"), None).effect.flip
+      } yield assertTrue(
+        empty.getMessage.startsWith("'since' must be before 'until'"),
+        reversed.getMessage.startsWith("'since' must be before 'until'")
       )
     }
   )

@@ -187,7 +187,7 @@ object JobRoutes {
     for {
       body   <- parseJsonBody[RecruitmentRequest](req)
       runner <- ZIO.service[JobRunner]
-      effect = body.options.effect(RunTrigger.Api, body.autoConfirm.getOrElse(true), body.confirmedCriteriaId)
+      effect <- body.options.effect(RunTrigger.Api, body.autoConfirm.getOrElse(true), body.confirmedCriteriaId)
       result <- submitClubJob(runner, JobKind.Recruitment, body.club, Some(body.toJson))(effect)
     } yield jsonResponse(Status.Ok, result)
 

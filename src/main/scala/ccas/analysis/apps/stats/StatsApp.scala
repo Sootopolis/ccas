@@ -2,7 +2,7 @@ package ccas.analysis.apps.stats
 
 import java.time.{Duration, Instant}
 
-import zio.{Chunk, Clock, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Chunk, Clock, IO, RIO, Scope, Task, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution, OutputFile, ReportRoot}
 import ccas.analysis.apps.stats.StatsUtils.*
@@ -106,6 +106,12 @@ object StatsApp extends ZIOAppDefault {
       contributions = aggregate(rows, displayNames)
     } yield StatsResult(contributions, rows.size, matchCount)
 
+  /** Refuses a period that does not run forwards. */
+  def checkPeriod(since: Instant, until: Instant): IO[BadRequestException, Unit] =
+    ZIO.whenDiscard(!since.isBefore(until)) {
+      ZIO.fail(BadRequestException(s"'since' must be before 'until' (got $since .. $until)"))
+    }
+
   /** Per-member stats for a date range. */
   def playerOfPeriod(
     clubId: ClubId,
@@ -114,13 +120,11 @@ object StatsApp extends ZIOAppDefault {
   ): RIO[PostgresClient, StatsResult] =
     for {
       now <- Clock.instant
-      _ <- ZIO.whenDiscard(!since.isBefore(until)) {
-        ZIO.fail(BadRequestException(s"--since must be before --until (got $since .. $until)"))
-      }
+      _   <- checkPeriod(since, until)
       _ <- ZIO.whenDiscard(until.isAfter(now.minus(Duration.ofHours(12)))) {
         ZIO.fail(
           BadRequestException(
-            s"--until must be at least 12 hours before now to account for API data lag (earliest allowed: ${now.minus(Duration.ofHours(12))})"
+            s"'until' must be at least 12 hours before now to account for API data lag (latest allowed: ${now.minus(Duration.ofHours(12))})"
           )
         )
       }

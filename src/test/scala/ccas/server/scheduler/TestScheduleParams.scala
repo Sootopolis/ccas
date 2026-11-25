@@ -22,8 +22,16 @@ object TestScheduleParams extends ZIOSpecDefault {
     testMalformedJsonFails,
     testUnknownKeyFails,
     testJobNeedsAClubExactlyForClubKinds,
-    testJobRefusesStatsHalfPeriod
+    testJobRefusesStatsHalfPeriod,
+    testJobRefusesRecruitmentZeroTimeLimit
   )
+
+  private def testJobRefusesRecruitmentZeroTimeLimit =
+    test("job fails for Recruitment params with a time limit of 0") {
+      ScheduleParams.job(JobKind.Recruitment, Some("""{"timeLimitMinutes":0}""")).either.map { result =>
+        assertTrue(result.left.exists(_.getMessage == "'timeLimitMinutes' must be at least 1 (got 0)"))
+      }
+    }
 
   private def testJobNeedsAClubExactlyForClubKinds =
     test("job builds a club job for each club-scoped kind, and a clubless one for MatchRef and ClubData") {
