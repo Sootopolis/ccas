@@ -4,7 +4,7 @@ import java.time.Instant
 
 import scala.util.Try
 
-import zio.{Clock, RIO, ZIO}
+import zio.{Clock, IO, RIO, ZIO}
 import zio.http.*
 import zio.json.{jsonField, DeriveJsonCodec, JsonCodec, SnakeCase}
 
@@ -12,9 +12,9 @@ import ccas.analysis.apps.{ClubQuery, ClubResolution}
 import ccas.api.misc.subtypes.ClubId
 import ccas.server.jobs.JobKind
 import ccas.server.routes.RouteHelpers.*
-import ccas.server.scheduler.{JobSchedule, JobScheduler, MisfirePolicy, ScheduleTrigger, TriggerType}
+import ccas.server.scheduler.{JobSchedule, JobScheduler, MisfirePolicy, ScheduleParams, ScheduleTrigger, TriggerType}
 import ccas.utils.client.ChessComClient
-import ccas.utils.errors.{BadRequestException, NotFoundException}
+import ccas.utils.errors.{safeMessage, BadRequestException, NotFoundException}
 import ccas.utils.sql.PostgresClient
 
 object ScheduleRoutes {
@@ -196,6 +196,9 @@ object ScheduleRoutes {
         } yield UpdateArgs(None, normCron, tz, body.misfire, body.enabled, body.params.map(Some(_)))
     }
 
+  private def checkParams(kind: JobKind, params: Option[String]): IO[BadRequestException, Unit] =
+    ScheduleParams.job(kind, params).unit.mapError(e => BadRequestException(s"invalid $kind params: ${e.safeMessage}"))
+
   private def persist(schedule: JobSchedule): RIO[JobScheduler & PostgresClient, ScheduleResponse] =
     for {
       id      <- JobSchedule.insert(schedule)
@@ -216,6 +219,7 @@ object ScheduleRoutes {
         kind             <- ZIO.fromEither(parseJobKind(body.kind)).mapError(BadRequestException(_))
         now              <- Clock.instant
         clubless         <- ZIO.fromEither(buildCreate(kind, body, now)).mapError(BadRequestException(_))
+        _                <- checkParams(kind, body.params)
         resolutionOption <- ZIO.foreach(body.clubOption)(ClubRequest.resolve)
         scheduleOption <- resolutionOption.map(_.runnable) match {
           case Some(Left(_))     => ZIO.none
@@ -232,6 +236,7 @@ object ScheduleRoutes {
         body     <- parseJsonBody[UpdateScheduleRequest](req)
         existing <- JobSchedule.selectId(id).someOrFail(NotFoundException(s"Schedule $id not found"))
         args     <- ZIO.fromEither(buildUpdate(existing, body)).mapError(BadRequestException(_))
+        _        <- checkParams(existing.kind, body.params)
         _ <- JobSchedule.update(
           id = id,
           intervalHours = args.intervalHours,

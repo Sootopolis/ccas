@@ -982,8 +982,87 @@ object TestRoutes extends ZIOSpecDefault {
     testPostBothTriggersReturns400,
     testPostCronMissingExprReturns400,
     testPostSchedulesIntervalOverflowReturns400,
-    testScheduleWritesAskForRecheck
+    testScheduleWritesAskForRecheck,
+    testPostSchedulesStoresDecodableParams,
+    testPostSchedulesUndecodableParamsReturns400,
+    testPostSchedulesUnrunnableStatsParamsReturns400,
+    testPostSchedulesChecksParamsBeforeResolving,
+    testPutScheduleUndecodableParamsReturns400
   )
+
+  // `params` is JSON carried in a JSON string, so it is encoded as one.
+  private def intervalWithParams(kind: String, club: String, params: String): String =
+    s"""{"kind":"$kind","club":$club,"intervalHours":24,"params":${params.toJson}}"""
+
+  private def testPostSchedulesStoresDecodableParams =
+    test("POST /api/schedules stores params its kind's options decode") {
+      val params = """{"trustUsernames":false}"""
+      for {
+        _ <- deleteAllSchedules
+        response <- ScheduleRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/schedules", intervalWithParams("Membership", testClub, params))
+        )
+        all <- JobSchedule.selectAll
+      } yield assertTrue(response.status == Status.Created, all.map(_.params) == List(Some(params)))
+    }
+
+  // A request body pasted whole into params is the likely mistake; stored, it would never fire (#547).
+  private def testPostSchedulesUndecodableParamsReturns400 =
+    test("POST /api/schedules refuses params its kind's options can't decode, and stores nothing") {
+      val body = intervalWithParams("Membership", testClub, """{"options":{"trustUsernames":false}}""")
+      for {
+        _        <- deleteAllSchedules
+        response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/schedules", body))
+        all      <- JobSchedule.selectAll
+      } yield assertTrue(response.status == Status.BadRequest, all.isEmpty)
+    }
+
+  private def testPostSchedulesUnrunnableStatsParamsReturns400 =
+    test("POST /api/schedules refuses Stats params the scheduler couldn't run: a since without an until") {
+      val body = intervalWithParams("Stats", testClub, """{"since":"2026-01-01T00:00:00Z"}""")
+      for {
+        _        <- deleteAllSchedules
+        response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/schedules", body))
+        all      <- JobSchedule.selectAll
+      } yield assertTrue(response.status == Status.BadRequest, all.isEmpty)
+    }
+
+  // Resolving a former name asks Chess.com who holds it now; the dummy client fails, which the resolver logs. A request
+  // that will be refused must not get that far.
+  private def testPostSchedulesChecksParamsBeforeResolving =
+    test("POST /api/schedules refuses bad params before it resolves the club, so Chess.com is not asked") {
+      val body         = intervalWithParams("Membership", """{"kind":"by_slug","slug":"renamed-from"}""", "{not-json")
+      val upstreamAsks = ZTestLogger.logOutput.map(_.count(_.message().contains("Upstream check")))
+      for {
+        _        <- deleteAllSchedules
+        _        <- ensureRenamedClub
+        before   <- upstreamAsks
+        response <- ScheduleRoutes.routes.runZIO(jsonRequest(Method.POST, "/api/schedules", body))
+        after    <- upstreamAsks
+        all      <- JobSchedule.selectAll
+      } yield assertTrue(response.status == Status.BadRequest, after == before, all.isEmpty)
+    }
+
+  private def testPutScheduleUndecodableParamsReturns400 =
+    test("PUT /api/schedules/:id refuses params its kind's options can't decode, and keeps the stored ones") {
+      val params         = """{"trustUsernames":false}"""
+      val clubDataParams = """{"minAgeHours":24}"""
+      for {
+        _ <- deleteAllSchedules
+        created <- ScheduleRoutes.routes.runZIO(
+          jsonRequest(Method.POST, "/api/schedules", intervalWithParams("Membership", testClub, params))
+        )
+        id <- JobSchedule.selectAll.map(_.head.id)
+        response <- ScheduleRoutes.routes.runZIO(
+          jsonRequest(Method.PUT, s"/api/schedules/$id", s"""{"params":${clubDataParams.toJson}}""")
+        )
+        all <- JobSchedule.selectAll
+      } yield assertTrue(
+        created.status == Status.Created,
+        response.status == Status.BadRequest,
+        all.map(_.params) == List(Some(params))
+      )
+    }
 
   private def testScheduleWritesAskForRecheck =
     test("POST, PUT and DELETE /api/schedules each ask the scheduler to recheck") {

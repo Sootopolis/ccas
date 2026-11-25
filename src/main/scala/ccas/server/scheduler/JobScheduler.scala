@@ -22,15 +22,8 @@ import zio.{
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution}
 import ccas.analysis.tables.RunTrigger
-import ccas.server.jobs.{ClubJobEffect, JobEffect, JobKind, JobRunner}
-import ccas.server.jobs.JobOptions.{
-  ClubDataOptions,
-  HistoryOptions,
-  MatchRefOptions,
-  MembershipOptions,
-  RecruitmentOptions,
-  StatsOptions
-}
+import ccas.server.jobs.{ClubJobEffect, JobEffect, JobRunner}
+import ccas.server.scheduler.ScheduleParams.ScheduledJob
 import ccas.utils.ProgressDisplay
 import ccas.utils.config.Settings
 import ccas.utils.errors.{safeMessage, ConflictException}
@@ -183,33 +176,13 @@ object JobScheduler {
         _ <- JobSchedule.updateLastRunAt(schedule.id, now)
       } yield ()).provideEnvironment(pgClientEnv)
 
-    /** Decode `schedule.params` into typed per-kind options and thread them into the app call. Decoding is eager
-      * (before `submit`), so a malformed row fails here without submitting or advancing `last_run_at`. Absent params
-      * decode to the kind's all-`None` defaults.
+    /** Builds the run before `submit`, so a row whose params won't decode fails here without submitting or advancing
+      * `last_run_at`.
       */
     private def jobEffect(schedule: JobSchedule): Task[JobEffect] =
-      schedule.kind match {
-        case JobKind.Recruitment =>
-          ScheduleParams.decode(schedule.params, RecruitmentOptions.Default).map { opts =>
-            clubJob(schedule)(opts.effect(RunTrigger.Scheduled, autoConfirm = true, confirmedCriteriaIdOption = None))
-          }
-        case JobKind.Membership =>
-          ScheduleParams.decode(schedule.params, MembershipOptions.Default).map { opts =>
-            clubJob(schedule)(opts.effect(RunTrigger.Scheduled))
-          }
-        case JobKind.MatchRef =>
-          ScheduleParams.decode(schedule.params, MatchRefOptions.Default).map(_.effect)
-        case JobKind.History =>
-          ScheduleParams.decode(schedule.params, HistoryOptions.Default).map { opts =>
-            clubJob(schedule)(opts.effect(RunTrigger.Scheduled))
-          }
-        case JobKind.Stats =>
-          for {
-            opts   <- ScheduleParams.decode(schedule.params, StatsOptions.Default)
-            effect <- opts.effect
-          } yield clubJob(schedule)(effect)
-        case JobKind.ClubData =>
-          ScheduleParams.decode(schedule.params, ClubDataOptions.Default).map(_.effect)
+      ScheduleParams.job(schedule.kind, schedule.params).map {
+        case ScheduledJob.ForClub(effect)  => clubJob(schedule)(effect)
+        case ScheduledJob.Clubless(effect) => effect
       }
 
     // The schedule's club is resolved when the job starts, not when it is decoded, and by id — so the job runs

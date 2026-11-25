@@ -1,11 +1,14 @@
 package ccas.server.scheduler
 
+import zio.ZIO
 import zio.test.{assertTrue, Spec, ZIOSpecDefault}
 
 import ccas.api.misc.subtypes.ClubSlug
+import ccas.server.jobs.JobKind
 import ccas.server.jobs.JobOptions.{ClubDataOptions, MembershipOptions, RecruitmentOptions}
+import ccas.server.scheduler.ScheduleParams.ScheduledJob
 
-/** Decoding a schedule's free-text `params` column into its kind's options; what the options mean is
+/** Decoding a schedule's free-text `params` column into its kind's options and job; what the options mean is
   * [[ccas.server.jobs.TestJobOptions]].
   */
 object TestScheduleParams extends ZIOSpecDefault {
@@ -17,8 +20,24 @@ object TestScheduleParams extends ZIOSpecDefault {
     testClubDataMinAgeDecodes,
     testRecruitmentFullDecode,
     testMalformedJsonFails,
-    testUnknownKeyFails
+    testUnknownKeyFails,
+    testJobNeedsAClubExactlyForClubKinds,
+    testJobRefusesStatsHalfPeriod
   )
+
+  private def testJobNeedsAClubExactlyForClubKinds =
+    test("job builds a club job for each club-scoped kind, and a clubless one for MatchRef and ClubData") {
+      ZIO.foreach(JobKind.values.toList)(kind => ScheduleParams.job(kind, None).map(kind -> _)).map { jobs =>
+        val clubless = jobs.collect { case (kind, _: ScheduledJob.Clubless) => kind }.toSet
+        assertTrue(clubless == Set(JobKind.MatchRef, JobKind.ClubData))
+      }
+    }
+
+  private def testJobRefusesStatsHalfPeriod = test("job fails for Stats params with a since but no until") {
+    ScheduleParams.job(JobKind.Stats, Some("""{"since":"2026-01-01T00:00:00Z"}""")).exit.map { exit =>
+      assertTrue(exit.isFailure)
+    }
+  }
 
   private def testAbsentParamsAreDefault = test("absent params decode to the kind's all-None Default") {
     ScheduleParams.decode(None, ClubDataOptions.Default).map { opts =>
