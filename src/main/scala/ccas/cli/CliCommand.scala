@@ -199,15 +199,15 @@ object CliCommand {
       }
       .optional
 
-  // A count where 0 or less would end the run at once as if it had finished (#548); the server refuses it too, but
-  // only after an interactive run has had the operator confirm its criteria.
-  private def positiveIntOpt(name: String): Options[Option[Int]] =
+  // A value below `min` means nothing the operator could want (#548, #555). Refused while parsing even where the server
+  // checks it too, as for recruit, whose interactive run would otherwise ask the operator to confirm criteria first.
+  private def intOptAtLeast(name: String, min: Int): Options[Option[Int]] =
     intOpt(name).mapOrFail {
-      case Some(n) if n < 1 =>
+      case Some(n) if n < min =>
         Left(
           ValidationError(
             validationErrorType = ValidationErrorType.InvalidValue,
-            error = HelpDoc.p(s"--$name must be at least 1 (got $n)")
+            error = HelpDoc.p(s"--$name must be at least $min (got $n)")
           )
         )
       case valueOption => Right(valueOption)
@@ -342,7 +342,7 @@ object CliCommand {
         (Options.boolean("full") ?? "Clear member-query history and re-crawl all members") ++
         (Options.boolean("include-finished") ?? "Re-queue recently finished matches for refresh") ++
         (Options.boolean("refresh") ?? "Refresh already-stored matches, not just newly seen ones") ++
-        (intOpt("refresh-min-hours") ?? "Skip refreshing a match seen within the last N hours") ++
+        (intOptAtLeast("refresh-min-hours", 0) ?? "Skip refreshing a match seen within the last N hours") ++
         clubsOpt ++ clubIdOpt ++ allOpt ++ noProgressOpt ++ detachOpt
     ).withHelp("Submit a match-history crawl job (current club, --club a,b, or --all managed clubs)")
       .map {
@@ -371,10 +371,10 @@ object CliCommand {
       options = serverOpt(default) ++
         (Options.text("criteria").optional ??
           s"Which of the club's named criteria to use (default: \"${RecruitmentAlias.Default}\")") ++
-        (positiveIntOpt("target") ?? "Stop once N candidates have been found") ++
+        (intOptAtLeast("target", 1) ?? "Stop once N candidates have been found") ++
         (Options.boolean("cumulative") ?? "Count candidates already found earlier today toward the target") ++
         sourceClubsOpt ++
-        (positiveIntOpt("time-limit-minutes") ??
+        (intOptAtLeast("time-limit-minutes", 1) ??
           s"Stop scouting after roughly N minutes (at most, and by default, ${JobCaps.MaxTimeLimitMinutes})") ++
         exploreOpt ++ clubOpt ++ clubIdOpt ++
         (Options.boolean("stdout") ??
@@ -476,7 +476,7 @@ object CliCommand {
       }
 
   private def jobs(default: String): Command[CliCommand] =
-    Command("jobs", serverOpt(default) ++ (intOpt("limit") ?? "Maximum number of recent jobs to list"))
+    Command("jobs", serverOpt(default) ++ (intOptAtLeast("limit", 1) ?? "Maximum number of recent jobs to list"))
       .withHelp("List recent jobs and their status")
       .map { case (server, limit) => Jobs(server, limit) }
 
@@ -495,7 +495,7 @@ object CliCommand {
       name = "add",
       options = serverOpt(default) ++
         (Options.text("reason").optional ?? "Reason recorded with the blacklist entry") ++
-        (intOpt("months") ?? "Auto-expire the entry after N months") ++ clubOpt ++ clubIdOpt,
+        (intOptAtLeast("months", 1) ?? "Auto-expire the entry after N months") ++ clubOpt ++ clubIdOpt,
       args = Args.text("username").repeat1 ?? "Username(s) to blacklist"
     ).withHelp("Blacklist one or more usernames for a club")
       .map { case ((server, reason, months, club, clubIdOption), usernames) =>

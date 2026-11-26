@@ -3,10 +3,10 @@ package ccas.server.jobs
 import java.time.Instant
 
 import zio.ZIO
-import zio.test.{assertCompletes, assertTrue, Spec, ZIOSpecDefault}
+import zio.test.{assertCompletes, assertTrue, Spec, TestClock, ZIOSpecDefault}
 
 import ccas.analysis.tables.RunTrigger
-import ccas.server.jobs.JobOptions.{HistoryOptions, RecruitmentOptions, StatsOptions}
+import ccas.server.jobs.JobOptions.{ClubDataOptions, HistoryOptions, RecruitmentOptions, StatsOptions}
 
 /** The rules a job's options carry, which an HTTP submission and a schedule share. */
 object TestJobOptions extends ZIOSpecDefault {
@@ -58,10 +58,37 @@ object TestJobOptions extends ZIOSpecDefault {
         )
       )
     },
+    // 0 means something for each: refresh every settled match, skip no club, list members with no counted game.
+    test("a history refreshMinHours, ClubData minAgeHours or stats minGames below 0 is refused, and 0 is accepted") {
+      def history(n: Int)  = HistoryOptions(None, None, None, Some(n)).effect(RunTrigger.Api)
+      def clubData(n: Int) = ClubDataOptions(Some(n)).effect
+      def stats(n: Int)    = StatsOptions(None, None, Some(n)).effect
+      for {
+        refresh  <- history(-1).flip
+        minAge   <- clubData(-1).flip
+        minGames <- stats(-1).flip
+        _        <- history(0) *> clubData(0) *> stats(0)
+      } yield assertTrue(
+        refresh.getMessage == "'refreshMinHours' must be at least 0 (got -1)",
+        minAge.getMessage == "'minAgeHours' must be at least 0 (got -1)",
+        minGames.getMessage == "'minGames' must be at least 0 (got -1)"
+      )
+    },
     test("StatsOptions.period parses both since and until into a period") {
-      StatsOptions(Some("2026-01-01"), Some("2026-02-01T00:00:00Z"), None).period.map { period =>
-        assertTrue(period.contains((Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-02-01T00:00:00Z"))))
-      }
+      for {
+        _      <- TestClock.setTime(Instant.parse("2026-03-01T00:00:00Z"))
+        period <- StatsOptions(Some("2026-01-01"), Some("2026-02-01T00:00:00Z"), None).period
+      } yield assertTrue(
+        period.contains((Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-02-01T00:00:00Z")))
+      )
+    },
+    // The run-time check stays too (TestStatsApp); this one keeps the job from being submitted at all.
+    test("a stats period whose until is less than 12 hours before now is refused before any job is built") {
+      for {
+        _       <- TestClock.setTime(Instant.parse("2026-02-01T12:00:00Z"))
+        tooSoon <- StatsOptions(Some("2026-01-01"), Some("2026-02-01T00:00:01Z"), None).effect.flip
+        _       <- StatsOptions(Some("2026-01-01"), Some("2026-02-01T00:00:00Z"), None).effect
+      } yield assertTrue(tooSoon.getMessage.startsWith("'until' must be at least 12 hours before now"))
     },
     test("StatsOptions.period with neither since nor until is None (all-time)") {
       StatsOptions.Default.period.map(period => assertTrue(period.isEmpty))

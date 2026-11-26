@@ -2,7 +2,7 @@ package ccas.analysis.apps.recruitment
 
 import java.time.{Instant, ZoneOffset}
 
-import zio.{Clock, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
+import zio.{Clock, IO, RIO, Scope, ZIO, ZIOAppArgs, ZIOAppDefault}
 
 import ccas.analysis.apps.{ClubQuery, ClubResolution, NamedClub, PlayerUpdater, UsernameRenameResolver}
 import ccas.analysis.tables.*
@@ -32,9 +32,9 @@ object BlacklistApp extends ZIOAppDefault {
             val usernames = usernamesStr.split(',').map(s => Username.wrap(s.trim)).toList
             val months    = rest.lift(1).map(_.toInt)
             for {
-              club <- resolve(clubStr)
-              now  <- Clock.instant
-              expiresAt = months.map(m => now.atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant)
+              now       <- Clock.instant
+              expiresAt <- expiresAfter(months, now)
+              club      <- resolve(clubStr)
               _ <- addToBlacklist(club = club, usernames = usernames, reason = rest.headOption, expiresAt = expiresAt)
             } yield ()
           case "list" :: clubStr :: _ =>
@@ -51,6 +51,14 @@ object BlacklistApp extends ZIOAppDefault {
         Settings.live
       )
     }
+
+  /** When an entry added at `now` for `months` expires. Fewer than 1 month is refused: the entry would expire on
+    * arrival and, as the upsert overwrites `expires_at`, lift an existing indefinite one (#555).
+    */
+  def expiresAfter(months: Option[Int], now: Instant): IO[BadRequestException, Option[Instant]] =
+    BadRequestException
+      .requireAtLeast("months", 1, months)
+      .as(months.map(m => now.atZone(ZoneOffset.UTC).plusMonths(m.toLong).toInstant))
 
   private def resolve(clubStr: String): RIO[ChessComClient & PostgresClient, NamedClub] =
     ClubResolution.resolveRunnable(ClubQuery.BySlug(ClubSlug.wrap(clubStr)))

@@ -199,7 +199,8 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
     testPostUnknownClub,
     testPostAddPersistsEntry,
     testPostAddMultipleUsernames,
-    testPostAddWithMonthsSetsExpiresAt
+    testPostAddWithMonthsSetsExpiresAt,
+    testPostMonthsBelowOneRefused
   )
 
   private def bySlug(slug: ClubSlug): String = s"""{"kind":"by_slug","slug":"$slug"}"""
@@ -275,6 +276,25 @@ object TestBlacklistRoutes extends ZIOSpecDefault {
       entry.flatMap(_.expiresAt).exists(t => t.isAfter(lower) && t.isBefore(upper))
     )
   }
+
+  // Before #555, `months: 0` overwrote the existing entry's `expires_at` with now, lifting an indefinite ban.
+  private def testPostMonthsBelowOneRefused =
+    test("POST with months below 1 answers 400 and leaves an existing entry as it was") {
+      val responses         = Map("player/new-blacklist" -> apiPlayerJson(pidB.value, "new-blacklist"))
+      def body(months: Int) = s"""{"club":${bySlug(testClubSlug)},"usernames":["new-blacklist"],"months":$months}"""
+      for {
+        _        <- ensureClub
+        _        <- ensurePlayer(pidB, "new-blacklist")
+        _        <- RecruitmentBlacklist.upsert(RecruitmentBlacklist(testClubId, pidB, seedAt, None, None))
+        zero     <- runReq(Method.POST, "/api/blacklist", body(0), responses)
+        negative <- runReq(Method.POST, "/api/blacklist", body(-1), responses)
+        entries  <- RecruitmentBlacklist.selectByClub(testClubId)
+      } yield assertTrue(
+        zero.status == Status.BadRequest,
+        negative.status == Status.BadRequest,
+        entries.find(_.playerId == pidB).exists(_.expiresAt.isEmpty)
+      )
+    }
 
   // ==========================================================================
   // Suite: DELETE /api/blacklist/:username
