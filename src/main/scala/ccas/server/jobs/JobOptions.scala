@@ -15,6 +15,7 @@ import ccas.analysis.tables.{RecruitmentAlias, RunTrigger}
 import ccas.api.misc.subtypes.ClubSlug
 import ccas.utils.TimeParser
 import ccas.utils.errors.BadRequestException
+import ccas.utils.errors.BadRequestException.requireAtLeast
 
 /** Each job kind's tunable options, and the one place they become the job's effect. An HTTP submission carries them
   * under `options` (`JobRoutes`) and a schedule in its `params` column (`JobScheduler`), as the same JSON. Every field
@@ -48,8 +49,8 @@ object JobOptions {
       confirmedCriteriaIdOption: Option[Long]
     ): IO[BadRequestException, ClubJobEffect] =
       for {
-        _ <- atLeastOne("target", target)
-        _ <- atLeastOne("timeLimitMinutes", timeLimitMinutes)
+        _ <- requireAtLeast("target", 1, target)
+        _ <- requireAtLeast("timeLimitMinutes", 1, timeLimitMinutes)
       } yield (club, jobRunIdOption) =>
         RecruitmentApp.recruit(
           clubSlug = club.slug,
@@ -102,8 +103,9 @@ object JobOptions {
       */
     def effectiveRefresh: Option[Int] = refreshMinHours.orElse(refresh.filter(identity).map(_ => 0))
 
-    def effect(trigger: RunTrigger): ClubJobEffect =
-      (club, jobRunIdOption) =>
+    /** A negative `refreshMinHours` is refused: it would refresh exactly as 0 does (#555). */
+    def effect(trigger: RunTrigger): IO[BadRequestException, ClubJobEffect] =
+      requireAtLeast("refreshMinHours", 0, refreshMinHours).as { (club, jobRunIdOption) =>
         HistoryApp.discover(
           clubSlug = club.slug,
           expectedClubIdOption = Some(club.clubId),
@@ -113,6 +115,7 @@ object JobOptions {
           trigger = trigger,
           jobRunIdOption = jobRunIdOption
         )
+      }
   }
   object HistoryOptions {
     given JsonCodec[HistoryOptions] = DeriveJsonCodec.gen
@@ -122,8 +125,8 @@ object JobOptions {
   @jsonNoExtraFields
   final case class StatsOptions(since: Option[String], until: Option[String], minGames: Option[Int]) {
 
-    /** `None` is all-time member stats, `Some` a player-of-period; one of `since` and `until` without the other is
-      * refused.
+    /** `None` is all-time member stats, `Some` a player-of-period; one of `since` and `until` without the other, or a
+      * period `StatsApp.checkPeriod` refuses at the current time, is refused.
       */
     def period: IO[BadRequestException, Option[(Instant, Instant)]] =
       (since, until) match {
@@ -137,14 +140,18 @@ object JobOptions {
         case _            => ZIO.fail(BadRequestException("Both 'since' and 'until' are required for period stats"))
       }
 
-    /** Parses the period now, so a bad one is refused before a job is submitted. */
+    /** Checks the period and `minGames` now, so a bad one is refused before a job is submitted. A negative `minGames`
+      * would list exactly what 0 does: everyone with a board in the period, those with no counted game included (#555).
+      */
     def effect: IO[BadRequestException, ClubJobEffect] =
-      period.map { periodOption => (club, _) =>
+      for {
+        _            <- requireAtLeast("minGames", 0, minGames)
+        periodOption <- period
+      } yield (club, _) =>
         periodOption match {
           case Some((start, end)) => StatsApp.playerOfPeriodAndReport(club.clubId, start, end, minGames.getOrElse(1))
           case None               => StatsApp.memberStatsAndReport(club.clubId)
         }
-      }
   }
   object StatsOptions {
     given JsonCodec[StatsOptions] = DeriveJsonCodec.gen
@@ -165,15 +172,12 @@ object JobOptions {
   @jsonNoExtraFields
   final case class ClubDataOptions(minAgeHours: Option[Int]) {
 
-    def effect: JobEffect = _ => ClubDataApp.refresh(minAgeHours)
+    /** A negative `minAgeHours` is refused: like 0, it would skip no club (#555). */
+    def effect: IO[BadRequestException, JobEffect] =
+      requireAtLeast("minAgeHours", 0, minAgeHours).as(_ => ClubDataApp.refresh(minAgeHours))
   }
   object ClubDataOptions {
     given JsonCodec[ClubDataOptions] = DeriveJsonCodec.gen
     val Default: ClubDataOptions     = ClubDataOptions(None)
   }
-
-  private def atLeastOne(key: String, valueOption: Option[Int]): IO[BadRequestException, Unit] =
-    ZIO.foreachDiscard(valueOption.filter(_ < 1)) { value =>
-      ZIO.fail(BadRequestException(s"'$key' must be at least 1 (got $value)"))
-    }
 }

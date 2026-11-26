@@ -23,8 +23,17 @@ object TestScheduleParams extends ZIOSpecDefault {
     testUnknownKeyFails,
     testJobNeedsAClubExactlyForClubKinds,
     testJobRefusesStatsHalfPeriod,
-    testJobRefusesRecruitmentZeroTimeLimit
+    testJobRefusesRecruitmentZeroTimeLimit,
+    testJobRefusesClubDataNegativeMinAge
   )
+
+  // A schedule is the only way ClubData's options are given.
+  private def testJobRefusesClubDataNegativeMinAge =
+    test("job fails for ClubData params with a negative minAgeHours") {
+      ScheduleParams.job(JobKind.ClubData, Some("""{"minAgeHours":-1}""")).either.map { result =>
+        assertTrue(result.left.exists(_.getMessage == "'minAgeHours' must be at least 0 (got -1)"))
+      }
+    }
 
   private def testJobRefusesRecruitmentZeroTimeLimit =
     test("job fails for Recruitment params with a time limit of 0") {

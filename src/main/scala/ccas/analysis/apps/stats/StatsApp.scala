@@ -106,10 +106,21 @@ object StatsApp extends ZIOAppDefault {
       contributions = aggregate(rows, displayNames)
     } yield StatsResult(contributions, rows.size, matchCount)
 
-  /** Refuses a period that does not run forwards. */
+  /** Refuses a period that does not run forwards, or that ends within 12 hours of now, before Chess.com's data has
+    * settled. Asked at submit and again at run time: a scheduled period that passes once only grows older.
+    */
   def checkPeriod(since: Instant, until: Instant): IO[BadRequestException, Unit] =
-    ZIO.whenDiscard(!since.isBefore(until)) {
-      ZIO.fail(BadRequestException(s"'since' must be before 'until' (got $since .. $until)"))
+    Clock.instant.flatMap { now =>
+      val latestUntil = now.minus(Duration.ofHours(12))
+      if (!since.isBefore(until)) {
+        ZIO.fail(BadRequestException(s"'since' must be before 'until' (got $since .. $until)"))
+      } else if (until.isAfter(latestUntil)) {
+        ZIO.fail(
+          BadRequestException(
+            s"'until' must be at least 12 hours before now to account for API data lag (latest allowed: $latestUntil)"
+          )
+        )
+      } else { ZIO.unit }
     }
 
   /** Per-member stats for a date range. */
@@ -119,15 +130,7 @@ object StatsApp extends ZIOAppDefault {
     until: Instant
   ): RIO[PostgresClient, StatsResult] =
     for {
-      now <- Clock.instant
-      _   <- checkPeriod(since, until)
-      _ <- ZIO.whenDiscard(until.isAfter(now.minus(Duration.ofHours(12)))) {
-        ZIO.fail(
-          BadRequestException(
-            s"'until' must be at least 12 hours before now to account for API data lag (latest allowed: ${now.minus(Duration.ofHours(12))})"
-          )
-        )
-      }
+      _ <- checkPeriod(since, until)
       (rows, matchCount) <- ClubBoard.selectClubBoardsInPeriod(clubId, since, until) <&> ClubMatch.countForClubInPeriod(
         clubId = clubId,
         since = since,

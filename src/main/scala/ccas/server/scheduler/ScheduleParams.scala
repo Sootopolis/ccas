@@ -39,14 +39,20 @@ object ScheduleParams {
       case JobKind.MatchRef =>
         decode(params, MatchRefOptions.Default).map(opts => ScheduledJob.Clubless(opts.effect))
       case JobKind.History =>
-        decode(params, HistoryOptions.Default).map(opts => ScheduledJob.ForClub(opts.effect(RunTrigger.Scheduled)))
+        for {
+          opts   <- decode(params, HistoryOptions.Default)
+          effect <- opts.effect(RunTrigger.Scheduled)
+        } yield ScheduledJob.ForClub(effect)
       case JobKind.Stats =>
         for {
           opts   <- decode(params, StatsOptions.Default)
           effect <- opts.effect
         } yield ScheduledJob.ForClub(effect)
       case JobKind.ClubData =>
-        decode(params, ClubDataOptions.Default).map(opts => ScheduledJob.Clubless(opts.effect))
+        for {
+          opts   <- decode(params, ClubDataOptions.Default)
+          effect <- opts.effect
+        } yield ScheduledJob.Clubless(effect)
     }
 
   /** Decode `params` into `A`, falling back to `default` when absent or blank. */

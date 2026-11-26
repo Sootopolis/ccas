@@ -448,6 +448,42 @@ object TestCliParser extends ZIOSpecDefault {
         zeroLimit
       )
     },
+    // `--limit 0` listed "no jobs", as if there were none (#555).
+    test("jobs --limit takes 1 or more, and 0 or less is rejected") {
+      for {
+        one      <- parsed("jobs", "--limit", "1")
+        zero     <- parse("jobs", "--limit", "0").exit.map(_.isFailure)
+        negative <- parse("jobs", "--limit=-1").exit.map(_.isFailure)
+      } yield assertTrue(one.contains(CliCommand.Jobs(DefaultServer, Some(1))), zero, negative)
+    },
+    // `--months 0` expired the entry on arrival, lifting an existing ban (#555).
+    test("blacklist add --months takes 1 or more, and 0 or less is rejected") {
+      for {
+        one      <- parsed("blacklist", "add", "--months", "1", "u1")
+        zero     <- parse("blacklist", "add", "--months", "0", "u1").exit.map(_.isFailure)
+        negative <- parse("blacklist", "add", "--months=-2", "u1").exit.map(_.isFailure)
+      } yield assertTrue(
+        one.exists {
+          case add: CliCommand.BlacklistAdd => add.months.contains(1)
+          case _                            => false
+        },
+        zero,
+        negative
+      )
+    },
+    // 0 means "refresh every settled match"; a negative refreshed exactly as 0 does (#555).
+    test("history --refresh-min-hours takes 0 or more, and a negative is rejected") {
+      for {
+        zero     <- parsed("history", "--refresh-min-hours", "0", "--club", "team-alpha")
+        negative <- parse("history", "--refresh-min-hours=-1", "--club", "team-alpha").exit.map(_.isFailure)
+      } yield assertTrue(
+        zero.exists {
+          case history: CliCommand.History => history.refreshMinHours.contains(0)
+          case _                           => false
+        },
+        negative
+      )
+    },
     test("top-level serve and stop no longer parse (grouped under server)") {
       for {
         serveFailed <- parse("serve").exit.map(_.isFailure)

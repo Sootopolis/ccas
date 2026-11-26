@@ -216,11 +216,10 @@ object JobRoutes {
 
   private def submitHistory(req: Request): RIO[JobRunner & ChessComClient & PostgresClient, Response] =
     for {
-      body   <- parseJsonBody[HistoryRequest](req)
-      runner <- ZIO.service[JobRunner]
-      results <- submitClubJobs(runner, JobKind.History, body.clubs, Some(body.toJson))(
-        body.options.effect(RunTrigger.Api)
-      )
+      body    <- parseJsonBody[HistoryRequest](req)
+      runner  <- ZIO.service[JobRunner]
+      effect  <- body.options.effect(RunTrigger.Api)
+      results <- submitClubJobs(runner, JobKind.History, body.clubs, Some(body.toJson))(effect)
     } yield jsonResponse(Status.Ok, results)
 
   private def submitStats(req: Request): RIO[JobRunner & ChessComClient & PostgresClient, Response] =

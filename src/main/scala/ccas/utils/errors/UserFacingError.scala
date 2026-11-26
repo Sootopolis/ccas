@@ -1,5 +1,6 @@
 package ccas.utils.errors
 
+import zio.{IO, ZIO}
 import zio.http.Status
 import zio.json.{DeriveJsonCodec, EncoderOps, JsonCodec, JsonEncoder}
 
@@ -29,6 +30,12 @@ object BadRequestException {
     new BadRequestException(msg, ErrorResponse(msg).toJson)
   def of[B: JsonEncoder](body: B, msg: String): BadRequestException =
     new BadRequestException(msg, body.toJson)
+
+  /** Refuses a request field `key` set below `min`; an absent one passes. */
+  def requireAtLeast(key: String, min: Int, valueOption: Option[Int]): IO[BadRequestException, Unit] =
+    ZIO.foreachDiscard(valueOption.filter(_ < min)) { value =>
+      ZIO.fail(BadRequestException(s"'$key' must be at least $min (got $value)"))
+    }
 }
 
 final class NotFoundException private (msg: String, body: => String) extends Exception(msg) with UserFacingError {
